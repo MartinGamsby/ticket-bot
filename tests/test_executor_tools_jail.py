@@ -5,9 +5,11 @@ allowlist, and the guarantee that a bad tool call never raises out of `dispatch(
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
 import pytest
 
+from ticketbot.adapters.runtimes.none import NoneRuntime
 from ticketbot.executors.tools import (
     ToolContext,
     ToolError,
@@ -141,6 +143,74 @@ def test_jail_accepts_a_new_file_in_a_new_nested_directory(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
+# the SECOND permitted root: the artifacts dir (runs/<id>/)
+#
+# `jail()` itself stays single-root; `_jailed()` is what tries the artifacts dir
+# after the workspace. The role prompts render `{plan_file}`, `{section_file}` and
+# `{run_dir}/pr.md` as ABSOLUTE run-dir paths, so a workspace-only tool path
+# resolver refuses every artifact the planner and reporter are told to write.
+# --------------------------------------------------------------------------- #
+
+
+def test_fs_write_accepts_an_absolute_path_under_the_artifacts_dir(tmp_path):
+    ctx = _ctx(tmp_path, allow={"fs.write"})
+    _, dispatch = build_tools(["fs.write"], ctx)
+    target = ctx.artifacts_dir / "sections" / "section-1.md"
+
+    out, is_err = dispatch("fs_write", {"path": str(target), "content": "# one\n"})
+
+    assert is_err is False, out
+    assert target.read_text(encoding="utf-8") == "# one\n"
+
+
+def test_fs_read_accepts_an_absolute_path_under_the_artifacts_dir(tmp_path):
+    ctx = _ctx(tmp_path, allow={"fs.read"})
+    (ctx.artifacts_dir / "plan.md").write_text("# Plan\n", encoding="utf-8")
+    _, dispatch = build_tools(["fs.read"], ctx)
+
+    out, is_err = dispatch("fs_read", {"path": str(ctx.artifacts_dir / "plan.md")})
+
+    assert is_err is False
+    assert out.strip() == "# Plan"
+
+
+def test_a_relative_path_still_means_the_workspace_not_the_artifacts_dir(tmp_path):
+    """The workspace is tried FIRST, so adding the second root must not quietly
+    redirect the coder's ordinary `fs.write("src/a.py", ...)` into the run dir."""
+    ctx = _ctx(tmp_path, allow={"fs.write"})
+    _, dispatch = build_tools(["fs.write"], ctx)
+
+    out, is_err = dispatch("fs_write", {"path": "src/a.py", "content": "x\n"})
+
+    assert is_err is False, out
+    assert (ctx.workspace / "src" / "a.py").exists()
+    assert not (ctx.artifacts_dir / "src" / "a.py").exists()
+
+
+def test_a_path_outside_both_roots_is_still_refused(tmp_path):
+    ctx = _ctx(tmp_path, allow={"fs.write"})
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    _, dispatch = build_tools(["fs.write"], ctx)
+
+    out, is_err = dispatch("fs_write", {"path": str(outside / "evil.txt"), "content": "x"})
+
+    assert is_err is True
+    assert "escapes the workspace" in out
+    assert not (outside / "evil.txt").exists()
+
+
+def test_the_two_root_error_message_still_hides_both_absolute_paths(tmp_path):
+    ctx = _ctx(tmp_path, allow={"fs.read"})
+    _, dispatch = build_tools(["fs.read"], ctx)
+
+    out, _is_err = dispatch("fs_read", {"path": "../../outside.txt"})
+
+    assert str(Path(ctx.workspace).resolve()) not in out
+    assert str(Path(ctx.artifacts_dir).resolve()) not in out
+
+
+# --------------------------------------------------------------------------- #
 # fs.write / fs.edit failure modes
 # --------------------------------------------------------------------------- #
 
@@ -211,6 +281,58 @@ def test_shell_run_executes_when_allowlisted(tmp_path):
     assert is_err is False
     assert "exit=0" in out
     assert "hi" in out
+
+
+def test_shell_run_falls_back_to_local_execution_when_the_runtime_cannot_exec(tmp_path):
+    """`NoneRuntime` is an OBJECT, not `None`, and its `exec()` raises. A plain
+    `runtime is not None` check therefore failed every `shell.run` under the
+    default `runtime: {type: none}` -- which `implement` and `verify` are granted
+    in all three built-in pipelines."""
+    ctx = _ctx(tmp_path, allow={"shell.run"}, runtime=NoneRuntime())
+    _, dispatch = build_tools(["shell.run"], ctx)
+
+    out, is_err = dispatch("shell_run", {"argv": [sys.executable, "-c", "print('local')"]})
+
+    assert is_err is False, out
+    assert "exit=0" in out
+    assert "local" in out
+    assert "cannot execute commands" not in out
+
+
+def test_shell_run_still_routes_through_a_runtime_that_can_execute(tmp_path):
+    """A runtime that never declares `can_exec` at all is assumed capable, so the
+    duck-typed default cannot silently strand a third-party runtime."""
+
+    class _Recording:
+        def __init__(self) -> None:
+            self.argv: list[str] | None = None
+
+        def exec(self, argv, *, cwd=None, timeout=None):  # noqa: ANN001
+            from ticketbot.adapters.runtimes.base import ExecOut
+
+            self.argv = list(argv)
+            return ExecOut(exit_code=0, stdout="from-the-runtime")
+
+    runtime = _Recording()
+    assert not hasattr(runtime, "can_exec")
+    ctx = _ctx(tmp_path, allow={"shell.run"}, runtime=runtime)
+    _, dispatch = build_tools(["shell.run"], ctx)
+
+    out, is_err = dispatch("shell_run", {"argv": ["echo", "hi"]})
+
+    assert is_err is False
+    assert runtime.argv == ["echo", "hi"]
+    assert "from-the-runtime" in out
+
+
+def test_source_read_returns_the_work_item_text_it_was_given(tmp_path):
+    ctx = _ctx(tmp_path, allow={"source.read"}, work_item_text="ENG-1: Add /health\n\nBody.")
+    _, dispatch = build_tools(["source.read"], ctx)
+
+    out, is_err = dispatch("source_read", {})
+
+    assert is_err is False
+    assert "ENG-1: Add /health" in out
 
 
 def test_build_tools_skips_unknown_tool_names(tmp_path):

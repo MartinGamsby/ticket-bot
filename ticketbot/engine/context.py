@@ -62,7 +62,11 @@ def build_context(
             "clarify_rounds": run.extra.get("clarify_rounds", 0),
             "status": run.status.value,
         },
-        "step": {},  # filled per step by the orchestrator
+        # Reserved namespace, deliberately empty: nothing populates it today, so a
+        # `when: "step.<anything>"` resolves to MISSING (falsy) rather than raising.
+        # If a per-step fact is ever needed here, the orchestrator has to pass it
+        # through `extra=` -- do not assume it is already filled.
+        "step": {},
     }
     if extra:
         ctx.update(extra)

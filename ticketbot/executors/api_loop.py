@@ -65,6 +65,7 @@ class ApiLoopExecutor:
             allow=set(req.tools),
             shell_timeout_s=self.shell_timeout_s,
             log=log,
+            work_item_text=req.work_item_text,
         )
         tool_defs, dispatch = build_tools(req.tools, ctx)
 
@@ -135,7 +136,20 @@ class ApiLoopExecutor:
 
     def _finish(self, text: str, usage: Usage, before: dict, ctx: ToolContext, **kw: Any) -> ExecResult:
         after = snapshot_tree(ctx.workspace)
-        files_written = sorted(set(diff_snapshots(before, after)) | set(ctx.files_written))
+        workspace = Path(ctx.workspace).resolve(strict=False)
+        # WORKSPACE writes only. `ctx.files_written` also collects run-dir
+        # artifacts -- `runtime.screenshot` drops a PNG under `artifacts_dir`, and
+        # the fs tools may write a role prompt's `{plan_file}`/`{run_dir}/pr.md`
+        # there too. `Orchestrator._run_step` feeds this list straight to
+        # `repo.verify_landed()`, which reports anything outside the workspace as
+        # MISSING and fails the run ("declared files were not found under the
+        # workspace") -- so a `verify` step that takes one screenshot would kill
+        # its own run. `tests/fakes.py: FakeExecutor` already draws the same line.
+        tool_writes = {
+            p for p in (Path(f).resolve(strict=False) for f in ctx.files_written)
+            if p == workspace or p.is_relative_to(workspace)
+        }
+        files_written = sorted(set(diff_snapshots(before, after)) | tool_writes)
         return finish_result(text, usage=usage, files_written=files_written, **kw)
 
 

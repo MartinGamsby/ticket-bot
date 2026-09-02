@@ -29,4 +29,11 @@ gates: {on_unclear: comment_and_unassign, on_pr_ready: human_review, max_clarify
 budget: {max_cost_usd: 25, max_wall_clock_s: 5400}
 source: {type: file}
 sink:   {type: file}
-repo:   {type: git_local, path: "."}
+# NO `path:` here. `extends:` deep-merges, so a `path` set in this parent survives
+# into every child -- including the two that switch to `repo: {type: github}` and
+# supply a `clone:` instead. `GithubRepo` only installs its per-repo clone cache
+# when `path` is absent, so an inherited `path: "."` makes it fetch and
+# `git worktree add` inside the PROFILE's own directory (i.e. this checkout)
+# rather than the cloned repo. `GitLocalRepo` already defaults `path` to "." on
+# its own, so leaving it out changes nothing for the file profiles.
+repo:   {type: git_local}

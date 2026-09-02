@@ -12,6 +12,11 @@ from .base import BaseRuntime, ExecOut, RuntimeUnavailable
 
 
 class NoneRuntime(BaseRuntime):
+    # No command-execution surface at all -- `executors/tools.py: _shell_run` reads
+    # this and runs the command locally instead of handing it to `exec()` below.
+    # Without the flag, `shell.run` fails on every call under this (default) runtime.
+    can_exec = False
+
     def __init__(self, cfg: AdapterConfig | None = None) -> None:
         self.cfg = cfg
 

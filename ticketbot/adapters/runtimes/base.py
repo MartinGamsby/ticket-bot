@@ -31,6 +31,11 @@ class RuntimeUnavailable(RuntimeAdapterError):
 
 @runtime_checkable
 class Runtime(Protocol):
+    # Optional capability flag; callers read it with `getattr(rt, "can_exec", True)`
+    # rather than requiring it, so a duck-typed runtime need not declare it.
+    # False means `exec()` raises `RuntimeUnavailable` and the caller should run
+    # the command itself instead. See `BaseRuntime`.
+
     def describe(self) -> str: ...  # "Solari desktop 1280x720" / "none"
 
     def start(self) -> None: ...  # idempotent
@@ -69,9 +74,18 @@ class BaseRuntime:
     concrete runtimes have their own `__init__` that parses an `AdapterConfig`
     and never calls `super().__init__()`, so a dataclass-generated `__init__`
     here would simply be shadowed and never run.
+
+    `can_exec` is the capability flag callers use INSTEAD of `runtime is not None`
+    to decide whether to route a command here: `NoneRuntime` and `solari` in
+    `mode: desktop`/`browser` have no command-execution surface and raise
+    `RuntimeUnavailable` from `exec()`. `executors/tools.py: _shell_run` reads it
+    duck-typed (`getattr(runtime, "can_exec", True)`) and falls back to a local
+    subprocess when it is False, which is what keeps `shell.run` working under the
+    default `runtime: {type: none}`.
     """
 
     _started: bool = False
+    can_exec: bool = True
 
     def start(self) -> None:
         if self._started:

@@ -184,10 +184,9 @@ def _kill_process_tree(proc: subprocess.Popen) -> None:
     """Best-effort: kill the child and, on Windows, its whole descendant tree.
     Never raises -- a timeout is already the failure we're reporting.
     """
-    try:
-        proc.kill()
-    except OSError:
-        pass
+    # `taskkill /T` FIRST, while the parent is still alive: it walks the tree from
+    # this pid, and once the parent is dead Windows no longer relates the children
+    # to it, so killing first would orphan the whole subtree.
     if os.name == "nt":
         try:
             subprocess.run(
@@ -197,3 +196,7 @@ def _kill_process_tree(proc: subprocess.Popen) -> None:
             )
         except OSError:
             pass
+    try:
+        proc.kill()
+    except OSError:
+        pass

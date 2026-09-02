@@ -137,10 +137,12 @@ def _write_offline_profile(tmp_path: Path, repo_dir: Path) -> Path:
                 "peer": {"type": "fake", "name": "Fake Peer"},
             },
         },
-        # `builtin/pipelines/standard.yaml`'s `defaults: {executor: default, ...}`
-        # means every step without its own `executor:` resolves the KIND NAME
-        # "default" -- so the kind must be named "default" here; its ADAPTER
-        # `type:` is "fake", which is what `_install_fake_executor` registers.
+        # `builtin/pipelines/standard.yaml` deliberately OMITS `executor:`/`model:`
+        # from its `defaults:` (see that file's comment), so every step falls back
+        # to `executor.default`/`model.default` here. Those two happen to be NAMED
+        # "default" in this fixture, which is incidental -- what matters is that
+        # the kind's ADAPTER `type:` is "fake", which is what
+        # `_install_fake_executor` registers.
         "executor": {"default": "default", "kinds": {"default": {"type": "fake"}}},
         "runtime": {"type": "none"},
         "gates": {"on_pr_ready": "auto"},

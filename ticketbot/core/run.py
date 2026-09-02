@@ -25,7 +25,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from ..config.redact import Redactor
+from ..config.redact import Redactor, default_redactor
 from .workitem import WorkItem, slugify
 
 
@@ -182,7 +182,12 @@ class RunStore:
 
     def __init__(self, root: Path, redactor: Redactor | None = None) -> None:
         self.root = Path(root)
-        self.redactor = redactor if redactor is not None else Redactor()
+        # The SHARED redactor, not a fresh one: `register_secret()` populates the
+        # module-level instance, so a private `Redactor()` here would scrub by
+        # pattern only and write every adapter-expanded credential (Jira, GitHub,
+        # Anthropic, Solari, a `process` executor's `env:`) verbatim into
+        # `runs/<id>/` artifacts and logs.
+        self.redactor = redactor if redactor is not None else default_redactor()
 
     def new_id(self, item_key: str, now: datetime | None = None) -> str:
         """'%Y-%m-%d-%H%M' + '-' + slug(item_key) + '-' + 4 hex chars, e.g.

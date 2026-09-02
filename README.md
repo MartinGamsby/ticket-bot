@@ -24,7 +24,7 @@ configured source from the command line.)
 | `sink` | `file`, `jira`, `github_pr` | you want results as local files, a Jira comment, a GitHub PR, or several at once (`also:`). |
 | `model` | `anthropic`, `openai_compat`, `fake` | you switch model vendors, or want a cheaper/different model for one role (`model: cheap` on a step). `fake` replays a scripted list of turns and exists so the suite can drive the engine with no vendor at all. |
 | `executor` | `process`, `api` | you want to drive a coding CLI you already trust (`claude -p`, `codex exec`, `aider`) vs. ticketbot's own path-jailed tool loop. |
-| `runtime` | `none`, `local_shell`, `solari` | you need code to run and screenshots to come from somewhere other than the machine ticketbot is on. |
+| `runtime` | `none`, `local_shell`, `solari` | you need code to run and screenshots to come from somewhere other than the machine ticketbot is on. A runtime with no command surface (`none`, and `solari` in `mode: desktop`/`browser`) leaves `shell.run` running locally rather than failing it. |
 | `repo` | `git_local`, `github` | you're iterating locally in a worktree vs. pushing branches and opening PRs on GitHub. |
 
 ## Install
@@ -286,9 +286,11 @@ step declared via `produces:`, `patch.diff` (the diff as the reviewer saw it),
 runtime actually returns an image), and `logs/<id>.log` per step. `sink: {type:
 file}` adds `result.md` (a one-line log of every sink call it received) and
 `attachments/` — where the screenshots the reporter sent are copied, exactly as a
-Jira sink would have uploaded them — and appends each comment it is given to the
-same `ticket_comment.md` the reporter wrote, separated by a `---` rule. `--dry-run`
-adds `dryrun.log`, the list of outward calls that were suppressed.
+Jira sink would have uploaded them. That sink also appends each comment it is given
+to `ticket_comment.md` (separated by a `---` rule), but the engine writes that file
+last, after the sink call, so the artifact always holds exactly the one comment
+that was posted rather than a copy of it per sink. `--dry-run` adds `dryrun.log`,
+the list of outward calls that were suppressed.
 
 The reporter writes `ticket_comment.md` before the pull request exists, so its
 `PR:` line is blank at that moment; once `repo.open_pr()` returns a URL the engine
@@ -336,8 +338,11 @@ configures. It is off (`runtime: {type: none}`) by default.
 - Per-step **tool allowlists**, enforced by the executor — the clarifier gets no
   filesystem tools, the reviewer/security roles never get `shell.run`.
 - Every filesystem tool is **path-jailed** (`executors/tools.py`) via
-  `Path.resolve()` + `is_relative_to()` against the workspace root — `../`,
-  absolute paths, and symlinks pointing outside it are all rejected.
+  `Path.resolve()` + `is_relative_to()` against two orchestrator-owned roots and
+  nothing else: the workspace (tried first, so a relative path always means "in
+  the repo") and the run directory (so a role prompt's `{plan_file}`,
+  `{section_file}` and `{run_dir}/pr.md` are writable). `../`, absolute paths
+  outside both, and symlinks pointing outside them are all rejected.
 - Subprocesses are always `subprocess.run(argv, shell=False)` — never a composed
   shell string — with an explicit env allowlist.
 - `when:` is a restricted parser, **never `eval`**; profile/pipeline YAML is
@@ -353,7 +358,9 @@ configures. It is off (`runtime: {type: none}`) by default.
   stops the run for a human; `auto` still never means "merge", only "don't pause".
 - `GitLocalRepo.verify_landed()` checks that a coder's declared file writes
   actually exist under the workspace before committing — a clean agent summary is
-  not proof the edit landed in the right tree.
+  not proof the edit landed in the right tree. It is given a step's *workspace*
+  writes only; run-directory artifacts (a screenshot, `plan.md`) are excluded, so
+  producing one can never be mistaken for an edit that landed in the wrong tree.
 
 ## Development
 

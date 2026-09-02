@@ -137,6 +137,29 @@ def _iso_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _work_item_text(item: WorkItem) -> str:
+    """The work item rendered as plain text, for the `source.read` tool.
+
+    The executors never see a `WorkItem` -- `ExecRequest.work_item_text` is how it
+    reaches `executors/tools.py: _source_read`, which is the only tool the
+    `intake` step is granted in every built-in pipeline.
+    """
+    lines = [f"{item.key}: {item.title}", f"Type: {item.issue_type}"]
+    if item.story_points is not None:
+        lines.append(f"Story points: {item.story_points}")
+    if item.labels:
+        lines.append(f"Labels: {', '.join(item.labels)}")
+    if item.url:
+        lines.append(f"URL: {item.url}")
+    lines.append("")
+    lines.append(item.description or "(no description)")
+    if item.acceptance:
+        lines += ["", "Acceptance criteria:", item.acceptance]
+    if item.comments:
+        lines += ["", "Comments:"] + [f"- {c.author}: {c.body}" for c in item.comments]
+    return "\n".join(lines)
+
+
 def _section_title(path: Path) -> str:
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
@@ -807,6 +830,7 @@ class Orchestrator:
                 step_id=step.id,
                 log_path=run_dir / "logs" / f"{step.id}.log",
                 model=step.model or pipeline.defaults.get("model"),
+                work_item_text=_work_item_text(item),
             )
 
             t0 = time.monotonic()
@@ -1016,6 +1040,7 @@ class Orchestrator:
             system=system, prompt=prompt, workspace=workspace, artifacts_dir=run_dir,
             tools=list(step.tools), timeout_s=step.timeout_s or 900,
             step_id=fixer_step.id, log_path=run_dir / "logs" / f"{fixer_step.id}.log",
+            work_item_text=_work_item_text(item),
         )
         result = executor.run(req)
 
@@ -1097,15 +1122,23 @@ class Orchestrator:
         )
         if pr_url:
             comment_text = _apply_pr_url(comment_text, pr_url)
-            # Rewrite the artifact too: `runs/<id>/ticket_comment.md` is the record
-            # of what was posted, and the reporter could not have known the URL.
-            self.store.write_artifact(run, "ticket_comment.md", comment_text)
         attachments = []
         for rel in run.extra.get("screenshots", []):
             p = run_dir / rel
             if p.is_file():
                 attachments.append(Attachment(filename=p.name, content_type="image/png", path=p))
-        sink.comment(item, comment_text, attachments=attachments)
-        sink.transition(item, "In Review")
+        try:
+            sink.comment(item, comment_text, attachments=attachments)
+            sink.transition(item, "In Review")
+        finally:
+            # LAST, and in a `finally` so a failing sink still leaves the record:
+            # `runs/<id>/ticket_comment.md` is what was posted, and the reporter
+            # could not have known the PR URL. It has to be written AFTER
+            # `sink.comment()` because a `file` sink -- the default, and the
+            # `also:` companion of every other shipped sink -- writes into the run
+            # dir too and APPENDS each comment it is handed to this same path.
+            # Writing only before left the offline default profile's headline
+            # artifact holding the comment twice, separated by a `---`.
+            self.store.write_artifact(run, "ticket_comment.md", comment_text)
 
         return self.gates.on_pr_ready(run)

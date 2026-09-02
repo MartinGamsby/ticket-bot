@@ -170,9 +170,11 @@ class AnthropicProvider:
             raise ProviderError(f"anthropic: connection error: {e}") from e
 
         if response.stop_reason == "refusal":
-            category = None
-            if response.stop_details is not None:
-                category = getattr(response.stop_details, "category", None)
+            # `getattr`, not attribute access: a refusal must surface as
+            # ProviderRefusal even from a response object that carries no
+            # `stop_details` at all, not as an AttributeError from this line.
+            stop_details = getattr(response, "stop_details", None)
+            category = getattr(stop_details, "category", None) if stop_details is not None else None
             raise ProviderRefusal("anthropic: the model refused the request", category=category)
 
         text = "".join(

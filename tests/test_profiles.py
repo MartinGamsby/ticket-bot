@@ -157,6 +157,30 @@ def test_github_codex_names_no_anthropic_model_or_vendor() -> None:
         assert "claude" not in cmd.lower(), f"executor kind {kind!r} spawns {cmd!r}"
 
 
+def test_no_github_repo_profile_inherits_a_local_repo_path() -> None:
+    """Asserted on the LOADED profile, for the same reason as the `peer` slot above:
+    `extends:` deep-merges, so a `path:` in `_base.yaml`'s `repo:` block survives
+    into every child -- including the ones that switch to `repo: {type: github}`
+    and give a `clone:` instead.
+
+    `GithubRepo.__init__` only installs its per-repo clone cache when `path` is
+    absent. With an inherited `path: "."` it points at the PROFILE's own directory
+    instead, so `ensure_clone()` fetches and `checkout()` runs `git worktree add`
+    against whatever repository contains `profiles/` -- this checkout -- rather
+    than the clone URL the profile names.
+    """
+    github_profiles = [p for p in PROFILE_PATHS if load_profile(p).repo.type == "github"]
+    assert github_profiles, "no profile uses repo type 'github' -- this would pass vacuously"
+
+    for path in github_profiles:
+        repo = load_profile(path).repo
+        assert repo.opt("clone"), f"{path.name}: a github repo profile must name a clone URL"
+        assert repo.opt("path") is None, (
+            f"{path.name} carries repo.path={repo.opt('path')!r} "
+            "(inherited from _base.yaml?), which defeats GithubRepo's clone cache"
+        )
+
+
 def test_file_text_none_is_the_fully_offline_default() -> None:
     profile = load_profile(PROFILES_DIR / "file-text-none.yaml")
     assert profile.source.type == "file"

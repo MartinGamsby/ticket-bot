@@ -150,6 +150,28 @@ def test_write_artifact_scrubs_secret_strings(tmp_path):
     assert "REDACTED" in text
 
 
+def test_write_artifact_scrubs_a_registered_secret_by_default(tmp_path, monkeypatch):
+    """The DEFAULT redactor is the shared, module-level one that
+    `register_secret()` populates -- a private `Redactor()` here would see no
+    registered secrets and fall back to pattern matching, writing every
+    adapter-expanded credential (a Jira token, a `${ENV}` value handed to a
+    `process` executor) into `runs/<id>/` verbatim.
+    """
+    from ticketbot.config import redact as redact_module
+
+    monkeypatch.setattr(redact_module, "_default", redact_module.Redactor())
+    literal = "not-a-recognizable-token-shape-at-all"
+    redact_module.register_secret(literal)
+
+    store = RunStore(tmp_path)  # no explicit redactor
+    run = store.new_run(profile_name="p", item=_item())
+    path = store.write_artifact(run, "steps/plan.md", f"the model echoed {literal} back")
+
+    text = path.read_text(encoding="utf-8")
+    assert literal not in text
+    assert "REDACTED" in text
+
+
 def test_write_artifact_writes_bytes_verbatim(tmp_path):
     store = RunStore(tmp_path)
     run = store.new_run(profile_name="p", item=_item())

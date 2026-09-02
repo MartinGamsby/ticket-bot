@@ -28,6 +28,15 @@ def test_preview_url_returns_none():
     assert _runtime().preview_url(3000) is None
 
 
+def test_declares_that_it_cannot_execute_commands():
+    """The flag callers read INSTEAD of `runtime is not None` -- this runtime is a
+    real object, so a null check says "route commands here" and every `shell.run`
+    then dies on `exec()`'s `RuntimeUnavailable`. `executors/tools.py` reads this
+    and runs the command locally instead.
+    """
+    assert _runtime().can_exec is False
+
+
 def test_exec_raises_runtime_unavailable():
     with pytest.raises(RuntimeUnavailable):
         _runtime().exec([])

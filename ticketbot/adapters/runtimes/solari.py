@@ -163,6 +163,15 @@ class SolariRuntime(BaseRuntime):
         self._page: Any = None
         self._code_ctx: Any = None
 
+    @property
+    def can_exec(self) -> bool:  # type: ignore[override]
+        """Only the sandbox mode has a command-execution surface -- `exec()` below
+        raises `RuntimeUnavailable` for `browser` and `desktop`. `executors/tools.py:
+        _shell_run` reads this and runs the command locally in those modes rather
+        than failing every `shell.run` the coder and tester make.
+        """
+        return self.mode == "sandbox"
+
     def describe(self) -> str:
         if self.mode == "desktop":
             return f"Solari desktop {self.resolution}"

@@ -22,16 +22,22 @@ import pytest
 import yaml
 
 from ticketbot.adapters.repos.base import Repo
+from ticketbot.adapters.repos.git_local import GitLocalRepo
 from ticketbot.adapters.runtimes.base import Runtime
 from ticketbot.adapters.sinks.base import Sink
 from ticketbot.adapters.sources.base import Source
 from ticketbot.config.loader import ConfigError
-from ticketbot.config.schema import Profile
+from ticketbot.config.schema import AdapterConfig, Profile
 from ticketbot.core.registry import EXECUTORS, MODELS, REPOS, RUNTIMES, SINKS, SOURCES
 from ticketbot.core.run import RunStatus
 from ticketbot.core.workitem import Attachment, WorkItem
-from ticketbot.engine.orchestrator import Orchestrator
-from tests.fakes import FakeExecutor, FakeRuntime, FakeSink
+from ticketbot.engine.orchestrator import Orchestrator, _list_sections
+from ticketbot.executors.api_loop import ApiLoopExecutor
+from ticketbot.executors.base import ExecRequest
+from ticketbot.executors.tools import ToolContext, build_tools
+from ticketbot.models.base import ToolResultBlock
+from ticketbot.models.fake import FakeModelProvider
+from tests.fakes import FakeExecutor, FakeRuntime, FakeSink, text_turn, tool_turn
 
 FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures"
 
@@ -865,3 +871,207 @@ def test_no_pr_url_means_the_comment_is_posted_untouched(
     assert sink.pr_url is None
     _key, markdown, _attachments = sink.comments[0]
     assert markdown == "Added /health.\nPR: \n"
+
+
+# --------------------------------------------------------------------------- #
+# 8. The `api` executor (S4) <-> the role prompts (S9) <-> the run loop (S8)
+#
+# The role prompts tell an agent to write its artifacts into the RUN DIR --
+# `engine/context.py` renders `{plan_file}` as `<run_dir>/plan.md`, `{sections_dir}`
+# as `<run_dir>/sections`, and `reporter.md` names `{run_dir}/pr.md` outright --
+# and the run loop then reads `plan.sections` back from exactly there. Neither
+# side is wrong on its own; what has to hold is that the ONE executor which
+# enforces a path jail can actually reach that directory, and that what it
+# reports having written is still only what landed in the workspace.
+#
+# `tests/test_e2e_offline.py` cannot see any of this: `FakeExecutor` writes
+# run-dir artifacts with `Path.write_text`, never through a tool.
+# --------------------------------------------------------------------------- #
+
+
+def _api_executor(script: list, *, runtime=None) -> ApiLoopExecutor:
+    return ApiLoopExecutor(
+        AdapterConfig(type="api", model="default", max_iterations=10),
+        provider=FakeModelProvider(script=script),
+        runtime=runtime,
+    )
+
+
+def _exec_request(workspace: Path, run_dir: Path, *, tools: list[str], step_id: str) -> ExecRequest:
+    return ExecRequest(
+        system="s",
+        prompt="p",
+        workspace=workspace,
+        artifacts_dir=run_dir,
+        tools=tools,
+        timeout_s=60,
+        step_id=step_id,
+    )
+
+
+def test_the_planner_can_write_the_run_dir_artifacts_the_fan_out_reads_back(
+    tmp_path: Path, git_repo: Path
+) -> None:
+    """The join that broke every shipped profile using the `api` executor: the
+    planner is told to write `{plan_file}`/`{sections_dir}/section-N.md` (absolute
+    run-dir paths), and `Orchestrator._list_sections(run_dir)` is what turns those
+    files into `implement`'s fan-out. A workspace-only path jail refuses the write,
+    the fan-out then finds nothing, and the run dies on "the planner produced no
+    sections" -- with the model having reported success.
+    """
+    run_dir = tmp_path / "runs" / "r1"
+    run_dir.mkdir(parents=True)
+    plan_file = run_dir / "plan.md"
+    sections_dir = run_dir / "sections"
+
+    executor = _api_executor(
+        [
+            tool_turn("fs_write", {"path": str(plan_file), "content": "# Plan\n\nSecurity: no\n"}),
+            tool_turn("fs_write", {"path": str(sections_dir / "section-1.md"), "content": "# One\n"}),
+            tool_turn("fs_write", {"path": str(sections_dir / "section-2.md"), "content": "# Two\n"}),
+            text_turn("Plan written: 2 sections."),
+        ]
+    )
+
+    result = executor.run(
+        _exec_request(git_repo, run_dir, tools=["fs.read", "fs.write", "fs.list"], step_id="plan")
+    )
+
+    assert result.error is None
+    assert plan_file.is_file()
+    # the run loop's own reader, on the real directory the tools just wrote
+    assert [p.name for p in _list_sections(run_dir)] == ["section-1.md", "section-2.md"]
+
+
+def test_the_coder_can_read_the_section_file_the_planner_left_in_the_run_dir(
+    tmp_path: Path, git_repo: Path
+) -> None:
+    """`prompts/roles/coder.md` says "Read {section_file}" -- and `prompt_values()`
+    renders that as a run-dir path, not a workspace one."""
+    run_dir = tmp_path / "runs" / "r1"
+    (run_dir / "sections").mkdir(parents=True)
+    section = run_dir / "sections" / "section-1.md"
+    section.write_text("# One\n\nImplement the health endpoint.\n", encoding="utf-8")
+
+    provider = FakeModelProvider(
+        script=[tool_turn("fs_read", {"path": str(section)}), text_turn("done")]
+    )
+    executor = ApiLoopExecutor(
+        AdapterConfig(type="api", model="default", max_iterations=10), provider=provider
+    )
+
+    result = executor.run(
+        _exec_request(git_repo, run_dir, tools=["fs.read", "fs.write"], step_id="implement")
+    )
+
+    assert result.error is None
+    # the tool_result fed back to the model carried the section's real text
+    followup = provider.calls[-1]["messages"][-1]
+    contents = "".join(
+        block.content for block in followup.content if isinstance(block, ToolResultBlock)
+    )
+    assert "Implement the health endpoint." in contents
+
+
+def test_a_run_dir_artifact_is_never_reported_as_a_workspace_write(
+    tmp_path: Path, git_repo: Path
+) -> None:
+    """`ExecResult.files_written` goes straight to `repo.verify_landed()`, which
+    calls anything outside the workspace a file that failed to land. The `verify`
+    step holds both `runtime.screenshot` and a `commit:` template, so a tester that
+    takes one screenshot would otherwise fail its own run.
+    """
+    run_dir = tmp_path / "runs" / "r1"
+    run_dir.mkdir(parents=True)
+
+    # The real repo adapter, and the real worktree it hands the run as a workspace
+    # -- `verify_landed()` measures against exactly that directory.
+    repo = GitLocalRepo(AdapterConfig(type="git_local", path=str(git_repo)))
+    workspace = repo.checkout("agent/seam-files-written")
+    try:
+        executor = _api_executor(
+            [
+                tool_turn("runtime_screenshot", {}),
+                tool_turn(
+                    "fs_write",
+                    {"path": str(run_dir / "test-report.md"), "content": "2 passed\n"},
+                ),
+                tool_turn("fs_write", {"path": "VERIFIED.txt", "content": "ok\n"}),
+                text_turn("2 passed, 0 failed."),
+            ],
+            runtime=FakeRuntime(png=PNG),
+        )
+
+        result = executor.run(
+            _exec_request(
+                workspace,
+                run_dir,
+                tools=["fs.read", "fs.write", "runtime.screenshot"],
+                step_id="verify",
+            )
+        )
+
+        assert result.error is None
+        assert (run_dir / "screenshots").is_dir()  # the screenshot really was taken
+        assert (run_dir / "test-report.md").is_file()
+        assert (workspace / "VERIFIED.txt").is_file()  # and the workspace edit landed
+        assert not any(str(run_dir) in str(p) for p in result.files_written)
+
+        # the real check the orchestrator runs before every `commit:` step
+        assert repo.verify_landed(result.files_written) == []
+    finally:
+        repo.cleanup()
+
+
+def test_the_ingest_step_is_handed_the_ticket_text_its_only_tool_returns(
+    tmp_path: Path, git_repo: Path
+) -> None:
+    """`source.read` is the ONLY tool `intake` is granted in every built-in
+    pipeline, and `executors/tools.py` reads it out of `ToolContext.work_item_text`
+    -- which only the engine can fill, because an executor never sees a `WorkItem`.
+    """
+    profile = _profile(tmp_path, git_repo)
+    executor = _executor()
+    orch = _orchestrator(profile, tmp_path / "runs", executor=executor)
+
+    orch.run_once(input_text=ITEM_TEXT)
+
+    intake = next(r for r in executor.requests if r.step_id == "intake")
+    assert "Add a /health endpoint" in intake.work_item_text
+    assert "Add a simple health check endpoint." in intake.work_item_text
+    assert "Given X, when Y, then Z" in intake.work_item_text  # the acceptance criteria
+
+    # ...and it survives the last hop, into the tool the model actually calls
+    ctx = ToolContext(
+        workspace=git_repo,
+        artifacts_dir=tmp_path,
+        allow={"source.read"},
+        work_item_text=intake.work_item_text,
+    )
+    _defs, dispatch = build_tools(["source.read"], ctx)
+    out, is_err = dispatch("source_read", {})
+    assert is_err is False
+    assert "Add a /health endpoint" in out
+
+
+def test_the_file_sink_and_the_engine_do_not_both_leave_a_ticket_comment(
+    tmp_path: Path, git_repo: Path
+) -> None:
+    """Both own `runs/<id>/ticket_comment.md`: the engine writes the record of what
+    it posted, and `FileSink.comment()` APPENDS every comment it is handed to that
+    same path. Driven with the REAL `FileSink` (the default sink, and the `also:`
+    companion of every other shipped sink), the short ticket comment -- one of the
+    two things this system exists to produce -- came out doubled.
+    """
+    profile = _profile(tmp_path, git_repo)
+    runs_dir = tmp_path / "runs"
+    orch = _orchestrator(profile, runs_dir, executor=_executor_writing_comment("Added /health.\n"))
+
+    run = orch.run_once(input_text=ITEM_TEXT)
+
+    on_disk = (runs_dir / run.id / "ticket_comment.md").read_text(encoding="utf-8")
+    assert on_disk == "Added /health.\n"
+    assert "---" not in on_disk
+    assert on_disk.count("Added /health.") == 1
+    # the sink still logged the call it received
+    assert "- comment" in (runs_dir / run.id / "result.md").read_text(encoding="utf-8")

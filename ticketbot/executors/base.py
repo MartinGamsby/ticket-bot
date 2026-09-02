@@ -32,6 +32,11 @@ class ExecRequest:
     step_id: str = ""
     log_path: Path | None = None  # append stdout/stderr/tool traffic here
     model: str | None = None  # model SLOT name; resolved by the caller for `api`
+    # The work item as text, for the `source.read` tool. The engine fills this in
+    # (`Orchestrator._work_item_text`) because the executors never see a `WorkItem`
+    # -- without it `source.read`, the ONLY tool `intake` is granted in every
+    # built-in pipeline, hands the ingest role an empty string.
+    work_item_text: str = ""
 
 
 @dataclass

@@ -67,6 +67,22 @@ class Redactor:
 _default = Redactor()
 
 
+def default_redactor() -> Redactor:
+    """The process-wide `Redactor` that `register_secret()` populates and `redact()`
+    scrubs through.
+
+    Anything that scrubs on its own (rather than calling `redact()`) must take THIS
+    instance, not a fresh `Redactor()` -- a private one has no registered secrets,
+    so it falls back to pattern matching alone and misses every literal credential
+    an adapter expanded from a `${ENV}` ref. `core.run.RunStore` is the caller that
+    needs it, since it scrubs every artifact and log line it writes.
+
+    Returned by call, never imported as a module global, so a test that swaps
+    `_default` out (see `tests/test_config_redact.py`) still isolates correctly.
+    """
+    return _default
+
+
 def redact(text: str) -> str:
     return _default.scrub(text)
 

@@ -120,9 +120,23 @@ screenshots.
   sources that implement it, once the item's run is terminal — without that, a `file` source re-yields
   every inbox file on every sweep, forever.
 - Secrets are `${ENV}` references, expanded at use time, `register_secret()`'d, and never written to
-  `config.resolved.yaml` or a log.
+  `config.resolved.yaml` or a log. `register_secret()` populates ONE process-wide `Redactor`; anything
+  that scrubs without going through `redact()` must take that instance via `default_redactor()` (as
+  `RunStore` does) — a private `Redactor()` sees no registered secrets and falls back to pattern
+  matching alone.
 - Subprocesses are always `shell=False` with an explicit argv list and an env allowlist.
-- Every filesystem tool goes through `executors/tools.py: jail()`.
+- Every filesystem tool goes through `executors/tools.py: _jailed()`, which calls `jail()` against
+  the workspace and then the run dir. Those two orchestrator-owned roots are the whole permitted set;
+  `jail()` itself stays single-root so the containment check has one auditable definition. The run
+  dir has to be writable because the role prompts name it: the planner writes `{plan_file}` and
+  `{sections_dir}/section-N.md`, the coder reads `{section_file}` back, and the reporter writes
+  `{run_dir}/pr.md` — all rendered as absolute run-dir paths by `engine/context.py`.
+- What an executor reports in `ExecResult.files_written` is WORKSPACE writes only. The orchestrator
+  hands that list to `repo.verify_landed()`, which treats a path outside the workspace as a file that
+  failed to land — so letting a run-dir artifact (a screenshot, `plan.md`) in there fails the run.
+- A `Runtime` is a real object even when it does nothing, so never gate on `runtime is not None`:
+  `NoneRuntime` and `solari` in `mode: desktop`/`browser` raise `RuntimeUnavailable` from `exec()`.
+  Ask `getattr(runtime, "can_exec", True)` and do the work locally when it is False.
 - `when:` expressions are parsed by `core/predicate.py`. **Never `eval`.**
 - A pipeline's `defaults:` block only ever holds real fallback VALUES (a real model slot name, a real
   executor kind name, a timeout). It must never hold the literal string `"default"` for `executor:`/
@@ -145,8 +159,10 @@ screenshots.
 - `extends:` DEEP-merges, so a profile does not opt out of an inherited block by omitting it. A
   profile that means to replace a model slot must SAY so — `profiles/github-codex.yaml` exists to use
   no Anthropic model, and omitting the `peer` slot silently inherited `_base.yaml`'s Anthropic one
-  for the `review` step. Assert such properties on the LOADED profile; scanning the file's own text
-  cannot see what `extends:` brought in.
+  for the `review` step. The same leak bit `repo.path`: `_base.yaml` carrying `path: "."` survived
+  into the two `repo: {type: github}` profiles and defeated `GithubRepo`'s per-repo clone cache, so
+  `_base.yaml` now names only what EVERY child wants. Assert such properties on the LOADED profile;
+  scanning the file's own text cannot see what `extends:` brought in.
 - Tests are pytest, run with `uv run pytest`. No test may hit the network, spawn a real coding CLI, or
   touch a real Jira/GitHub/Solari account. A test that mutates a git repo builds a throwaway one under
   `tmp_path` (the `git_repo` fixture) — never this checkout.

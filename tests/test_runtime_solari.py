@@ -258,6 +258,20 @@ def test_describe_browser():
     assert SolariRuntime(AdapterConfig(type="solari", mode="browser")).describe() == "Solari browser"
 
 
+@pytest.mark.parametrize(
+    "mode,expected",
+    [("sandbox", True), ("desktop", False), ("browser", False)],
+)
+def test_can_exec_matches_the_modes_that_have_a_command_surface(mode, expected):
+    """`can_exec` must agree with `exec()`: `browser`/`desktop` raise
+    `RuntimeUnavailable` (see the exec tests below), and both shipped Solari
+    profiles use `mode: desktop`. `executors/tools.py: _shell_run` reads this to
+    decide whether to hand the command over or run it locally -- disagreeing here
+    would fail every `shell.run` those profiles' coder and tester steps make.
+    """
+    assert SolariRuntime(AdapterConfig(type="solari", mode=mode)).can_exec is expected
+
+
 # --------------------------------------------------------------------------- #
 # desktop start()/stop()
 # --------------------------------------------------------------------------- #
