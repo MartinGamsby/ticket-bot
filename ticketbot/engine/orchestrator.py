@@ -3,12 +3,14 @@ item, gate on `when:`/human approval/questions, account cost and wall-clock spen
 commit per step, and persist `run.json` after every step so a crash is resumable.
 
 This module is deliberately the only place that wires a `Profile` to live adapter
-objects. It never imports `anthropic`, `httpx`, or any concrete adapter module
-directly -- everything is resolved through the registries in `core.registry`, with
+objects. It never imports `anthropic` or `httpx`, and reaches concrete adapter
+modules only through the registries in `core.registry`, with
 `inspect.signature`-based kwarg filtering (see `_instantiate`) so one adapter
 construction call site works for every adapter kind, whatever extra kwargs (
 `base_dir`, `run_dir`, `client`, ...) a particular adapter's constructor does or
-does not accept.
+does not accept. The single deliberate exception is the direct `FileSource`
+import: `--input-text`/`--input` must be able to override whatever source the
+profile configures, which means naming that one class outright.
 """
 
 from __future__ import annotations
@@ -67,6 +69,8 @@ _SECURITY_DIFF_KEYWORDS = (
 _SECTION_HEADING_RE = re.compile(r"^#[ \t]+(.+?)[ \t]*$", re.MULTILINE)
 _PLAN_SECURITY_RE = re.compile(r"^\s*(?:##+\s*)?Security[: ].*?\b(yes|no)\b", re.IGNORECASE | re.MULTILINE)
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*\n(.*?)```", re.DOTALL)
+# A `PR:` line the reporter left blank -- see `_apply_pr_url`.
+_EMPTY_PR_LINE_RE = re.compile(r"^[ \t]*PR:[ \t]*$", re.MULTILINE)
 
 _DEFAULT_SYSTEM_PROMPT = (
     "You are a careful, precise software engineering agent operating as one step "
@@ -105,6 +109,28 @@ def _extract_json_block(text: str) -> str:
 def _diff_touches_security(diff_text: str) -> bool:
     lowered = diff_text.lower()
     return any(kw in lowered for kw in _SECURITY_DIFF_KEYWORDS)
+
+
+def _apply_pr_url(text: str, pr_url: str) -> str:
+    """Put the real pull request URL into a ticket comment the reporter wrote
+    BEFORE that URL existed.
+
+    `builtin/prompts/roles/reporter.md` asks for a line written exactly as
+    `PR: {pr_url}` and states outright that "the orchestrator substitutes the real
+    PR URL into the written ticket_comment.md after open_pr() returns" -- the
+    `publish` step runs before `repo.open_pr()`, so `{pr_url}` renders empty for
+    the reporter and the line it writes is a dangling `PR:`. Handle both the
+    literal placeholder (a model that copied the token verbatim) and the blank
+    line, and fall back to appending the link so the comment always carries it.
+    """
+    if "{pr_url}" in text:
+        return text.replace("{pr_url}", pr_url)
+    if _EMPTY_PR_LINE_RE.search(text):
+        return _EMPTY_PR_LINE_RE.sub(lambda _m: f"PR: {pr_url}", text, count=1)
+    if pr_url in text:
+        return text
+    separator = "" if text.endswith("\n") else "\n"
+    return f"{text}{separator}\nPR: {pr_url}\n"
 
 
 def _iso_now() -> str:
@@ -294,6 +320,53 @@ class Orchestrator:
     def _build_repo(self, run_dir: Path) -> Repo:
         return _instantiate(REPOS, self._repo_cfg(), base_dir=self.profile.base_dir, run_dir=run_dir)
 
+    def _close_source(self, source: Source) -> None:
+        """Release whatever the source holds open (`JiraSource` owns an
+        `httpx.Client`). Each entry point closes the source IT opened, and clears
+        the cache so the next call to `_source()` builds a fresh one -- a closed
+        client must never be handed to a second run.
+        """
+        close = getattr(source, "close", None)
+        if close is not None:
+            try:
+                close()
+            except Exception as exc:  # noqa: BLE001 - closing must never fail a finished run
+                logger.warning("source close() failed: %s", exc)
+        if source is self._source_obj:
+            self._source_obj = None
+
+    def _mark_processed(self, source: Source, item: WorkItem) -> None:
+        """Tell a source that can retire an item it handed out to do so, now that
+        the item's run has reached a terminal state. `FileSource` moves the file
+        into `processed_dir`; without this call every poll sweep re-yields every
+        file in the inbox forever. Sources with nothing to retire (`JiraSource`,
+        whose `claim()` already transitioned the issue out of the polled JQL) do
+        not implement the method at all.
+        """
+        mark = getattr(source, "mark_processed", None)
+        if mark is None:
+            return
+        try:
+            mark(item)
+        except OSError as exc:
+            logger.warning("could not mark %s processed: %s", item.key, exc)
+
+    def _set_pr_url(self, sink: Sink, pr_url: str) -> None:
+        """Tell the sink which pull request the run just opened.
+
+        `GithubPrSink` reports ONTO the PR, so until it holds the URL every
+        `comment()`/`link()` it receives is a logged no-op. It has to be told
+        before the reporter's FIRST sink call, not after -- otherwise the whole
+        report is silently dropped for `sink: {type: github_pr}`.
+        """
+        setter = getattr(sink, "set_pr_url", None)
+        if setter is None:
+            return
+        try:
+            setter(pr_url)
+        except Exception as exc:  # noqa: BLE001 - a hand-off must never fail the run
+            logger.warning("could not hand the PR url to sink %s: %s", sink.describe(), exc)
+
     def _sink_error(self, sink: Sink, method: str, exc: Exception) -> None:
         logger.warning("sink %s failed on %s(): %s", sink.describe(), method, exc)
 
@@ -360,8 +433,11 @@ class Orchestrator:
         force_lock: bool = False,
     ) -> Run:
         source = self._resolve_source(input_text=input_text, input_path=input_path)
-        item = source.fetch(external_id)
-        return self._start_run(item, source, force_lock=force_lock)
+        try:
+            item = source.fetch(external_id)
+            return self._start_run(item, source, force_lock=force_lock)
+        finally:
+            self._close_source(source)
 
     def _start_run(self, item: WorkItem, source: Source, *, force_lock: bool) -> Run:
         # `store.new_run()` is a pure, side-effect-free dataclass construction (no
@@ -379,18 +455,21 @@ class Orchestrator:
     def resume(self, run_id: str, *, force_lock: bool = False) -> Run:
         run = self.store.load(run_id)
         source = self._source()
-        if run.external_id:
-            item = source.fetch(run.external_id)
-        else:
-            raw = json.loads(self.store.read_artifact(run, "workitem.json"))
-            item = WorkItem.from_dict(raw)
-
-        lock = RunLock(self.runs_dir, run.work_item_key)
-        lock.acquire(run.id, force=force_lock)
         try:
-            return self._run_pipeline(run, item, source=source, fresh=False)
+            if run.external_id:
+                item = source.fetch(run.external_id)
+            else:
+                raw = json.loads(self.store.read_artifact(run, "workitem.json"))
+                item = WorkItem.from_dict(raw)
+
+            lock = RunLock(self.runs_dir, run.work_item_key)
+            lock.acquire(run.id, force=force_lock)
+            try:
+                return self._run_pipeline(run, item, source=source, fresh=False)
+            finally:
+                lock.release()
         finally:
-            lock.release()
+            self._close_source(source)
 
     def poll(self, *, once: bool = False, max_items: int | None = None) -> list[Run]:
         source = self._source()
@@ -411,11 +490,17 @@ class Orchestrator:
                         continue
                     runs.append(run)
                     count += 1
+                    # The run has reached a terminal state (done, blocked or
+                    # failed); retire the item so the next sweep moves on rather
+                    # than picking the same one up again forever.
+                    self._mark_processed(source, item)
                 if once:
                     break
                 time.sleep(poll_seconds)
         except KeyboardInterrupt:
             logger.info("poll: interrupted, stopping cleanly")
+        finally:
+            self._close_source(source)
         return runs
 
     # ------------------------------------------------------------------ #
@@ -423,8 +508,34 @@ class Orchestrator:
     # ------------------------------------------------------------------ #
 
     def _run_pipeline(self, run: Run, item: WorkItem, *, source: Source, fresh: bool) -> Run:
+        # `built_sink` is the sink whose resources (an httpx client, per Jira/
+        # GitHub sink) were actually acquired; `sink` is what the run talks to.
+        # `--dry-run` wraps the former in a `DryRunSink` that deliberately never
+        # touches it, so closing the WRAPPER would release nothing -- the
+        # `finally` below closes what was really opened.
         run_dir = self.store.dir(run.id)
-        sink: Sink = self._build_sink(run_dir)
+        built_sink: Sink = self._build_sink(run_dir)
+        try:
+            return self._run_pipeline_inner(
+                run, item, source=source, fresh=fresh, run_dir=run_dir, built_sink=built_sink
+            )
+        finally:
+            try:
+                built_sink.close()
+            except Exception as exc:  # noqa: BLE001 - closing must never fail a finished run
+                logger.warning("sink close() failed: %s", exc)
+
+    def _run_pipeline_inner(
+        self,
+        run: Run,
+        item: WorkItem,
+        *,
+        source: Source,
+        fresh: bool,
+        run_dir: Path,
+        built_sink: Sink,
+    ) -> Run:
+        sink: Sink = built_sink
         repo: Repo = self._build_repo(run_dir)
         runtime = self._runtime()
 
@@ -546,7 +657,10 @@ class Orchestrator:
         except Exception as exc:  # noqa: BLE001 - banner must never crash a run
             logger.warning("banner: could not describe default executor: %s", exc)
 
-        repo_cfg = self.profile.repo
+        # `_repo_cfg()`, not `profile.repo`: with `--repo <path>` the run happens
+        # in the OVERRIDE, and the banner reports what was used, not what was
+        # configured.
+        repo_cfg = self._repo_cfg()
         repo_label = repo_cfg.opt("clone") or repo_cfg.opt("path") or repo_cfg.type
 
         return BannerFacts(
@@ -971,6 +1085,9 @@ class Orchestrator:
         pr_url = repo.open_pr(title, body)
         if pr_url:
             run.extra["pr_url"] = pr_url
+            # Before any sink call: a `github_pr` sink drops everything it is
+            # handed until it knows which PR to post onto.
+            self._set_pr_url(sink, pr_url)
             sink.link(item, pr_url, "Pull request")
 
         comment_text = (
@@ -978,6 +1095,11 @@ class Orchestrator:
             if comment_path.is_file()
             else result_text
         )
+        if pr_url:
+            comment_text = _apply_pr_url(comment_text, pr_url)
+            # Rewrite the artifact too: `runs/<id>/ticket_comment.md` is the record
+            # of what was posted, and the reporter could not have known the URL.
+            self.store.write_artifact(run, "ticket_comment.md", comment_text)
         attachments = []
         for rel in run.extra.get("screenshots", []):
             p = run_dir / rel

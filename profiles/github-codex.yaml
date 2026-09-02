@@ -30,6 +30,11 @@ model:
   providers:
     main:  {type: openai_compat, base_url: "${MODEL_BASE_URL}", api_key: "${MODEL_API_KEY}", model: gpt-5}
     cheap: {type: openai_compat, base_url: "${MODEL_BASE_URL}", api_key: "${MODEL_API_KEY}", model: gpt-5-mini}
+    # `peer` must be overridden explicitly, not merely omitted: `extends:`
+    # deep-merges, so leaving it out would inherit _base.yaml's ANTHROPIC peer and
+    # the `review` step (which asks for `model: peer`) would quietly call the one
+    # vendor this profile exists to avoid.
+    peer:  {type: openai_compat, base_url: "${MODEL_BASE_URL}", api_key: "${MODEL_API_KEY}", model: gpt-5}
 
 executor:
   default: codex-cli

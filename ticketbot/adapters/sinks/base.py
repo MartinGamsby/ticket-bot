@@ -86,6 +86,27 @@ class MultiSink:
     def link(self, item: WorkItem, url: str, title: str) -> None:
         self._fan_out("link", item, url, title)
 
+    def set_pr_url(self, url: str) -> None:
+        """Hand the freshly-opened pull request's URL to every wrapped sink that
+        wants one -- only `GithubPrSink` does, because it posts ONTO that PR and
+        drops every comment until it knows which one.
+
+        Deliberately not part of the `Sink` protocol and not routed through
+        `_fan_out`: a sink without the method is skipped rather than raising
+        `AttributeError`, and a failure here is logged rather than propagated --
+        it is a hand-off before the report, not the report itself.
+        """
+        for sink in (self.primary, *self.others):
+            setter = getattr(sink, "set_pr_url", None)
+            if setter is None:
+                continue
+            try:
+                setter(url)
+            except Exception as exc:  # noqa: BLE001 - never lose the report over a hand-off
+                logger.warning("MultiSink: %s.set_pr_url() failed: %s", sink.describe(), exc)
+                if self.on_error is not None:
+                    self.on_error(sink, "set_pr_url", exc)
+
     def close(self) -> None:
         """Close every sink, best-effort -- one sink's close() failing must not
         stop the others from releasing their resources."""

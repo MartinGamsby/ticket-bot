@@ -10,8 +10,11 @@ which model does the thinking, how a step's work actually gets done, where code
 runs, which repo host — is an **adapter** selected by one `type:` field in a
 profile. Swapping Jira for a text file, or Claude for a local OpenAI-compatible
 endpoint, or a coding CLI for ticketbot's own tool loop, is a config edit, never a
-code change. The engine itself never imports `anthropic`, `httpx`, or any concrete
-adapter — everything is resolved by name through `ticketbot/core/registry.py`.
+code change. The engine never imports `anthropic` or `httpx` — every adapter is
+resolved by name at run time through `ticketbot/core/registry.py`, against the
+protocol modules alone. (One deliberate exception: the orchestrator imports
+`FileSource` directly, so `--input-text`/`--input` can override the profile's
+configured source from the command line.)
 
 ## The swap points
 
@@ -19,7 +22,7 @@ adapter — everything is resolved by name through `ticketbot/core/registry.py`.
 |---|---|---|
 | `source` | `file`, `jira` | you move from ad-hoc/local tickets to a real Jira project (or back, for a demo). |
 | `sink` | `file`, `jira`, `github_pr` | you want results as local files, a Jira comment, a GitHub PR, or several at once (`also:`). |
-| `model` | `anthropic`, `openai_compat` | you switch model vendors, or want a cheaper/different model for one role (`model: cheap` on a step). |
+| `model` | `anthropic`, `openai_compat`, `fake` | you switch model vendors, or want a cheaper/different model for one role (`model: cheap` on a step). `fake` replays a scripted list of turns and exists so the suite can drive the engine with no vendor at all. |
 | `executor` | `process`, `api` | you want to drive a coding CLI you already trust (`claude -p`, `codex exec`, `aider`) vs. ticketbot's own path-jailed tool loop. |
 | `runtime` | `none`, `local_shell`, `solari` | you need code to run and screenshots to come from somewhere other than the machine ticketbot is on. |
 | `repo` | `git_local`, `github` | you're iterating locally in a worktree vs. pushing branches and opening PRs on GitHub. |
@@ -41,8 +44,15 @@ no environment set at all) and never written to `config.resolved.yaml` or a log.
 |---|---|
 | `ANTHROPIC_API_KEY` | `model: {type: anthropic}` — read directly by the Anthropic SDK; set `api_key: ${ANTHROPIC_API_KEY}` explicitly if you want it sourced from a profile-declared ref instead of the SDK's own default lookup. |
 | `JIRA_EMAIL`, `JIRA_API_TOKEN` | `source`/`sink: {type: jira}` — basic auth against Jira Cloud REST v3. |
+| `JIRA_BOT_ACCOUNT_ID` | `source: {type: jira}`'s `account_id:` — who `claim()` assigns the issue to. Without it, claiming logs a warning and only transitions. |
 | `GITHUB_TOKEN` | `sink: {type: github_pr}`, `repo: {type: github}` — used by the `gh` CLI when it's on PATH, else REST. |
 | `SOLARI_API_KEY` | `runtime: {type: solari}` — one key across sandboxes, browsers, and desktops. |
+| `MODEL_BASE_URL`, `MODEL_API_KEY` | `model: {type: openai_compat}` in `profiles/github-codex.yaml`. |
+| `PEER_BASE_URL`, `PEER_API_KEY` | the `peer` (second-vendor reviewer) slot in `profiles/jira-claude-solari.yaml`. |
+
+The names above are the ones the shipped profiles happen to use; `${ANY_NAME}`
+works anywhere in a profile, because the loader never interprets the name — it
+just leaves the reference alone until an adapter expands it.
 
 ## Quickstart, fully offline
 
@@ -62,19 +72,27 @@ runs/2026-09-01-1443-add-a-health-endpoint-a3f9/
   banner.txt   config.resolved.yaml   run.json      workitem.json
   plan.md      sections/section-1.md  patch.diff    test-report.md
   review.md    security.md            pr.md         ticket_comment.md
-  steps/<step-id>.md                  screenshots/  logs/<step-id>.log
+  result.md    attachments/           screenshots/  steps/<step-id>.md
+  logs/<step-id>.log
 ```
 
-and a `banner.txt` that says what actually ran, not what the config says:
+and a `banner.txt` that says what actually ran, not what the config says — the
+model line names the provider objects the steps really resolved to (including the
+effort each was constructed with), and the executor line is the executor object's
+own description, not the config's slot name:
 
 ```
 Using source=file "Add a /health endpoint" (Task)
 pipeline=builtin:pipelines/standard.yaml  (rule: default)
-models=ingest:Claude Haiku 4.5 · clarifier:Claude Opus 5 · planner:Claude Opus 5 · coder:Claude Opus 5 · tester:Claude Opus 5 · reviewer:Claude Opus 5 · security:Claude Opus 5 · reporter:Claude Opus 5
-executor=api: main
+models=ingest:Claude Haiku 4.5 (claude-haiku-4-5) effort=low · clarifier:Claude Opus 5 (claude-opus-5) effort=xhigh · planner:Claude Opus 5 (claude-opus-5) effort=xhigh · coder:Claude Opus 5 (claude-opus-5) effort=xhigh · tester:Claude Opus 5 (claude-opus-5) effort=xhigh · reviewer:Claude Opus 5 (claude-opus-5) effort=xhigh · security:Claude Opus 5 (claude-opus-5) effort=xhigh · reporter:Claude Opus 5 (claude-opus-5) effort=xhigh
+executor=api: Claude Opus 5 (claude-opus-5) effort=xhigh
 runtime=none
 repo=. @ agent/add-a-health-endpoint-add-a-health-endpoint
 ```
+
+`ticketbot config banner <profile>` prints the config-only version of the same
+thing — every model slot rather than the ones a pipeline uses, and no ticket line,
+because no work item has been fetched.
 
 ## Configuration
 
@@ -159,14 +177,25 @@ steps:
     role: coder
     for_each: plan.sections
     tools: [fs.read, fs.write, fs.edit, fs.list, shell.run]
+    isolation: worktree
     commit: "impl: {section.title}"
-  - {id: verify,  role: tester,   tools: [fs.read, fs.write, fs.edit, shell.run, runtime.screenshot], produces: [test-report.md]}
-  - {id: review,  role: reviewer, model: peer, tools: [fs.read, fs.edit], produces: [review.md]}
-  - {id: security, role: security, when: "plan.security == yes or diff.touches_security", produces: [security.md]}
+  - {id: verify,  role: tester,   tools: [fs.read, fs.write, fs.edit, shell.run, runtime.screenshot], produces: [test-report.md], commit: "test: {ticket_key}"}
+  - {id: review,  role: reviewer, model: peer, tools: [fs.read, fs.edit], produces: [review.md], commit: "review-fix: {ticket_key}"}
+  - {id: security, role: security, when: "plan.security == yes or diff.touches_security", tools: [fs.read, fs.edit], produces: [security.md], commit: "security-fix: {ticket_key}"}
   - {id: publish, role: reporter, tools: [fs.read, fs.write, runtime.screenshot], produces: [pr.md, ticket_comment.md]}
 on_question: pause_and_relay
 on_defer: spawn_fixer
 ```
+
+A step's `commit:` is rendered with the same `{placeholder}` values its prompt
+gets (plus `{section.*}` inside a `for_each` fan-out) and committed only after
+`verify_landed()` confirms the step's declared writes are really under the
+workspace. A step's `model:`/`executor:` are the slot and kind NAMES to look up;
+omitting them (as `defaults:` above does) is what selects `model.default` /
+`executor.default` — the literal string `"default"` is not a sentinel, it is just
+another name to resolve. `isolation: worktree` is recorded but advisory: the repo
+adapter decides how the workspace is isolated, and `git_local` already gives the
+whole run its own worktree.
 
 Three built-ins ship in `ticketbot/builtin/pipelines/`:
 
@@ -184,8 +213,9 @@ work. It supports `field op value` over `workitem.*` and prior step outputs
 `eq`/`ne`/`lt`/`lte`/`gt`/`gte`/`in`/`contains`/`is empty`/`is not empty` (`==`,
 `!=`, `<`, `<=`, `>`, `>=` also work as symbols). The mapping form
 (`{story_points: {lte: 2}}`, used by `pipeline_selector.rules`) uses the same
-operator set. `ambiguity`/`size`/`severity` compare by their declared order (`low
-< medium < high`, …), not alphabetically.
+operators, spelling the two emptiness tests `empty` and `not_empty`.
+`ambiguity`/`size`/`severity` compare by their declared order (`low < medium <
+high`, …), not alphabetically.
 
 `for_each: plan.sections` reproduces "one coder per section, sequentially": the
 planner writes `sections/section-1.md`, `section-2.md`, …, sorted **numerically**
@@ -230,14 +260,41 @@ pipeline_selector:
   default: builtin:pipelines/standard.yaml
 ```
 
+## Polling for work
+
+`ticketbot run` handles one item; `ticketbot poll` keeps taking them from the
+source (`--once` does a single sweep instead of looping every
+`source.poll_seconds`). Each item is claimed, run to a terminal state, and then
+**retired** so the next sweep moves on rather than picking it up again:
+
+| Source | A sweep yields | Retiring an item |
+|---|---|---|
+| `file` | files matching `glob:` (default `inbox/*.md`), oldest first, skipping anything already under `processed_dir:` (default `inbox/processed`) | the file is moved into `processed_dir` |
+| `jira` | the issues matching `jql:`, paged | nothing to do — `claim()` already assigned the issue and transitioned it out of the polled query |
+
+An item currently locked by another run is skipped rather than waited for, so two
+pollers can share a source without racing.
+
 ## The run directory
 
 Every run gets `runs/<id>/` (id = timestamp + item slug + 4 random hex chars),
 holding `banner.txt`, `config.resolved.yaml` (secrets still `${ENV}` refs, scrubbed
 of anything secret-shaped besides), `workitem.json`, `run.json`, every artifact a
-step declared via `produces:`, `steps/<id>.md` for each step's raw returned text,
+step declared via `produces:`, `patch.diff` (the diff as the reviewer saw it),
+`steps/<id>.md` for each step's raw returned text,
 `screenshots/` (only populated when `runtime.screenshot_on` names a step and the
-runtime isn't `none`), and `logs/<id>.log` per step.
+runtime actually returns an image), and `logs/<id>.log` per step. `sink: {type:
+file}` adds `result.md` (a one-line log of every sink call it received) and
+`attachments/` — where the screenshots the reporter sent are copied, exactly as a
+Jira sink would have uploaded them — and appends each comment it is given to the
+same `ticket_comment.md` the reporter wrote, separated by a `---` rule. `--dry-run`
+adds `dryrun.log`, the list of outward calls that were suppressed.
+
+The reporter writes `ticket_comment.md` before the pull request exists, so its
+`PR:` line is blank at that moment; once `repo.open_pr()` returns a URL the engine
+substitutes it into both the posted comment and the file, and hands it to any sink
+that reports onto the PR itself (`github_pr`, which drops comments until it knows
+which PR to post to).
 
 `run.json` is rewritten atomically (temp file + `os.replace`) after **every**
 step, recording status, timing, cost, commits and artifacts for each one — so a
@@ -312,6 +369,15 @@ coding CLI, or touches a real Jira/GitHub/Solari account — `tests/fakes.py`
 the real adapter registry to prove the whole thing produces every artifact in
 `runs/<id>/`, that `resume` genuinely skips completed steps, and that
 `--dry-run` makes no outward call at all.
+
+Most test modules cover one module against its own contract.
+`tests/test_seams.py` covers the joins instead — the paths no single module owns:
+`screenshot_on` from profile to run dir to sink attachment, the source-retirement
+call the poller has to make, closing what the engine opened, the pull request URL
+reaching the comment and the sinks that need it, the banner reporting live objects
+rather than config, every shipped profile defining the model slots its own
+pipelines name, and every name in the adapter registry actually importing to a
+class with a `describe()`.
 
 Manual smoke sequence, in order:
 

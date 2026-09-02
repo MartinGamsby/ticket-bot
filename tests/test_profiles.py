@@ -10,6 +10,7 @@ end for a representative work item at each size.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -29,16 +30,25 @@ PROFILE_NAMES = [p.stem for p in PROFILE_PATHS]
 
 assert PROFILE_PATHS, f"no profiles found under {PROFILES_DIR}"
 
+# Every environment variable any shipped profile references, plus the ones an
+# adapter reads on its own -- deleted before each test, and set to a sentinel by
+# `test_profile_loading_never_reads_the_environment`.
+ENV_VAR_NAMES = (
+    "JIRA_EMAIL", "JIRA_API_TOKEN", "JIRA_BOT_ACCOUNT_ID", "GITHUB_TOKEN",
+    "PEER_BASE_URL", "PEER_API_KEY", "MODEL_BASE_URL", "MODEL_API_KEY",
+    "ANTHROPIC_API_KEY", "SOLARI_API_KEY",
+)
+
+_ENV_REF_RE = re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*\}")
+
+SENTINEL = "expanded-at-load-time-which-must-never-happen"
+
 
 @pytest.fixture(autouse=True)
 def _no_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
     """Every assertion in this module runs with NO relevant environment variables
     set -- `${ENV}` refs must survive `load_profile` unexpanded regardless."""
-    for name in (
-        "JIRA_EMAIL", "JIRA_API_TOKEN", "JIRA_BOT_ACCOUNT_ID", "GITHUB_TOKEN",
-        "PEER_BASE_URL", "PEER_API_KEY", "MODEL_BASE_URL", "MODEL_API_KEY",
-        "ANTHROPIC_API_KEY", "SOLARI_API_KEY",
-    ):
+    for name in ENV_VAR_NAMES:
         monkeypatch.delenv(name, raising=False)
 
 
@@ -48,26 +58,41 @@ def test_profile_loads_and_validates_with_no_env_vars_set(path: Path) -> None:
     assert isinstance(profile, Profile)
 
 
-def _contains_env_ref(value: Any) -> bool:
+def _env_refs(value: Any) -> set[str]:
+    """Every `${NAME}` token in a parsed YAML tree. Reads the parsed DATA, not the
+    file's text, so a `${ENV}` mentioned only in a comment is never counted.
+    """
     if isinstance(value, str):
-        return "${" in value
+        return set(_ENV_REF_RE.findall(value))
     if isinstance(value, dict):
-        return any(_contains_env_ref(v) for v in value.values())
+        return set().union(*(_env_refs(v) for v in value.values())) if value else set()
     if isinstance(value, list):
-        return any(_contains_env_ref(v) for v in value)
-    return False
+        return set().union(*(_env_refs(v) for v in value)) if value else set()
+    return set()
 
 
 @pytest.mark.parametrize("path", PROFILE_PATHS, ids=PROFILE_NAMES)
-def test_env_refs_survive_unexpanded(path: Path) -> None:
-    # Read the raw YAML data (not the file's text) so a `${ENV}` mentioned only in
-    # a comment doesn't produce a false positive either way.
-    raw_data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    if not _contains_env_ref(raw_data):
-        pytest.skip(f"{path.name} has no ${{ENV}} refs to check")
-    profile = load_profile(path)
-    dumped = profile.model_dump_json()
-    assert "${" in dumped
+def test_profile_loading_never_reads_the_environment(
+    path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The property holds for EVERY profile, including the three that carry no
+    `${ENV}` refs at all: loading is byte-for-byte identical whether the
+    referenced variables are absent or populated. That is what makes
+    `ticketbot validate` runnable with no credentials anywhere, and it is a
+    stronger claim than "a `${` survived" -- with the variables unset, a loader
+    that DID expand would leave the ref looking untouched anyway.
+    """
+    raw_refs = _env_refs(yaml.safe_load(path.read_text(encoding="utf-8")))
+
+    with_nothing_set = load_profile(path).model_dump_json()  # autouse fixture cleared them
+    for name in ENV_VAR_NAMES:
+        monkeypatch.setenv(name, SENTINEL)
+    with_everything_set = load_profile(path).model_dump_json()
+
+    assert with_everything_set == with_nothing_set
+    assert SENTINEL not in with_everything_set
+    for ref in raw_refs:  # and each declared ref is still there, verbatim
+        assert ref in with_everything_set, ref
 
 
 @pytest.mark.parametrize("path", PROFILE_PATHS, ids=PROFILE_NAMES)
@@ -101,10 +126,35 @@ def test_no_profile_contains_a_secret_shaped_literal(path: Path) -> None:
         assert not pattern.search(raw), f"{path.name} contains what looks like a real {name} secret"
 
 
+def _yaml_body_lower(path: Path) -> str:
+    """The file's text minus whole-line `#` comments, lowercased -- a comment may
+    legitimately NAME the vendor it is explaining how to avoid."""
+    return "\n".join(
+        line for line in path.read_text(encoding="utf-8").splitlines()
+        if not line.lstrip().startswith("#")
+    ).lower()
+
+
 def test_github_codex_names_no_anthropic_model_or_vendor() -> None:
-    raw = (PROFILES_DIR / "github-codex.yaml").read_text(encoding="utf-8").lower()
+    """Asserted on the LOADED profile, not only on the file's own text.
+
+    `extends:` DEEP-MERGES, so a model slot this profile omits is inherited from
+    `_base.yaml` -- where `peer`, the slot `standard.yaml`'s `review` step asks
+    for, is an `anthropic` provider. A raw-text scan alone passes happily while
+    the review step calls the one vendor this profile exists to avoid.
+    """
+    raw = _yaml_body_lower(PROFILES_DIR / "github-codex.yaml")
     assert "anthropic" not in raw
     assert "claude" not in raw
+
+    profile = load_profile(PROFILES_DIR / "github-codex.yaml")
+    assert profile.model.providers, "an empty provider map would pass vacuously"
+    for slot, cfg in profile.model.providers.items():
+        assert cfg.type == "openai_compat", f"model slot {slot!r} resolved to {cfg.type!r}"
+        assert "claude" not in str(cfg.opt("model", "")).lower(), slot
+    for kind, cfg in profile.executor.kinds.items():
+        cmd = " ".join(str(part) for part in (cfg.opt("cmd") or []))
+        assert "claude" not in cmd.lower(), f"executor kind {kind!r} spawns {cmd!r}"
 
 
 def test_file_text_none_is_the_fully_offline_default() -> None:

@@ -103,13 +103,22 @@ screenshots.
 | `ticketbot/executors/` | `process` (spawn a coding CLI) and `api` (our own tool loop) + the path-jailed tools |
 | `ticketbot/models/` | ModelProvider implementations — the ONLY place `anthropic` is imported |
 | `ticketbot/adapters/` | sources, sinks, runtimes, repos — one directory per swap point |
-| `ticketbot/builtin/` | shipped pipelines and role prompts |
+| `ticketbot/builtin/` | shipped pipelines, role prompts, and `prompts/comments/` ticket-comment templates |
 | `profiles/` | example profiles |
 
 ## Conventions
 - Adapters are selected by a `type:` string resolved through `ticketbot/core/registry.py`. Adding one
   means: a new module, one `register()` line, and its own option validation — never a change to
-  `config/schema.py`.
+  `config/schema.py`. Every adapter also needs `describe()` (the banner is built from it, and
+  `tests/test_seams.py` imports every registered target and asserts it has one).
+- The banner reports what was USED, not what was configured: build its facts from the live adapter
+  objects and the effective config (`_repo_cfg()`, which honours `--repo`), never from
+  `profile.<block>` directly.
+- The engine closes what it opens. `_run_pipeline` closes the sink it built (the real one, not the
+  `--dry-run` wrapper, which deliberately never touches its inner sink), and `run_once`/`resume`/
+  `poll` each close the source they opened. `poll` additionally calls `mark_processed(item)` on
+  sources that implement it, once the item's run is terminal — without that, a `file` source re-yields
+  every inbox file on every sweep, forever.
 - Secrets are `${ENV}` references, expanded at use time, `register_secret()`'d, and never written to
   `config.resolved.yaml` or a log.
 - Subprocesses are always `shell=False` with an explicit argv list and an env allowlist.
@@ -122,9 +131,36 @@ screenshots.
   and `Orchestrator._provider()`/`_executor()` apply `profile.model.default`/`profile.executor.default`
   themselves). This was a real bug fixed in section 10 — see `builtin/pipelines/standard.yaml`'s
   `defaults:` comment before reintroducing it.
-- Nothing auto-merges. `gates.on_pr_ready: human_review` opens a draft PR and stops.
+- Nothing auto-merges, and no adapter has a merge call. The reporter step opens the PR (a draft, for
+  `repo: github`, unless `draft_pr: false`); `gates.on_pr_ready` only decides whether the run then
+  stops for a human (`human_review`) or finishes on its own (`auto`).
+- The PR URL does not exist until `repo.open_pr()` returns — after the sink was built and after the
+  reporter wrote its comment. `_after_reporter` therefore does two things with it before reporting:
+  `_set_pr_url(sink, url)` (a `github_pr` sink posts ONTO the PR and drops every comment until it
+  knows which one — so this must precede the first `link()`/`comment()`, not follow it), and
+  `_apply_pr_url()` on `ticket_comment.md`, which fills in the `PR:` line `prompts/roles/reporter.md`
+  asks for and could only leave blank. Anything else that must reach a sink after construction
+  follows the same shape: an optional method, `getattr`-probed, fanned out by `MultiSink`, never
+  added to the `Sink` protocol (which every sink must implement in full).
+- `extends:` DEEP-merges, so a profile does not opt out of an inherited block by omitting it. A
+  profile that means to replace a model slot must SAY so — `profiles/github-codex.yaml` exists to use
+  no Anthropic model, and omitting the `peer` slot silently inherited `_base.yaml`'s Anthropic one
+  for the `review` step. Assert such properties on the LOADED profile; scanning the file's own text
+  cannot see what `extends:` brought in.
 - Tests are pytest, run with `uv run pytest`. No test may hit the network, spawn a real coding CLI, or
-  touch a real Jira/GitHub/Solari account.
+  touch a real Jira/GitHub/Solari account. A test that mutates a git repo builds a throwaway one under
+  `tmp_path` (the `git_repo` fixture) — never this checkout.
+- `builtin/prompts/comments/{clarify,blocked,done}.md` are plain `{placeholder}` templates (no model
+  involved) meant to shape the ticket comments the engine posts itself. They ship and are
+  shape-tested, but **nothing renders them yet**: the clarify gate posts the raw `QUESTION:` text,
+  the reporter's own `ticket_comment.md` is posted verbatim, and a failed run posts nothing at all.
+  Wiring them is a product decision (it changes what lands on a real ticket, and `blocked.md` means
+  commenting on failures we currently stay silent about) — decide it deliberately, don't assume the
+  templates are live.
+- `tests/test_seams.py` is for wiring BETWEEN modules (a method one module exposes for another to
+  call, the banner, `screenshot_on`'s whole path, registry ↔ adapter agreement). Per-module behavior
+  belongs in that module's own `test_*.py`; a bug that only appears when two modules meet belongs in
+  the seams file.
 
 ## Docs
 Keep `README.md` describing the CURRENT state of the system, not a changelog. When you add an adapter,
