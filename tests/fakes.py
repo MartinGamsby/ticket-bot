@@ -4,14 +4,16 @@ sections append `FakeExecutor`, `FakeRuntime`, `FakeSource`, `FakeSink` here.
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 
 from ticketbot.adapters.repos.base import CommitResult
 from ticketbot.adapters.runtimes.base import ExecOut
 from ticketbot.adapters.sinks.base import SinkError
 from ticketbot.core.workitem import Attachment, WorkItem
-from ticketbot.models.base import ProviderMessage, ToolCall
+from ticketbot.engine import protocol as _protocol
+from ticketbot.executors.base import ExecRequest, ExecResult
+from ticketbot.models.base import ProviderMessage, ToolCall, Usage
 from ticketbot.models.fake import FakeModelProvider
 
 
@@ -232,3 +234,91 @@ class FakeSink:
 
     def close(self) -> None:
         self.closed = True
+
+
+WriteEntry = tuple[str, "str | bytes"]
+WriteSpec = "list[WriteEntry] | Callable[[ExecRequest], list[WriteEntry]]"
+
+
+class FakeExecutor:
+    """Satisfies the `Executor` protocol (`executors.base.Executor`); returns
+    scripted `ExecResult`s keyed by step id, and can WRITE files into the
+    workspace and/or the run dir (`artifacts_dir`) so the repo/commit path and
+    `for_each: plan.sections` fan-out are exercised without a real coding CLI or
+    model call.
+
+        FakeExecutor(
+            {"plan": ExecResult(text="...")},
+            writes={"implement": [("src/a.py", "x")]},              # -> workspace
+            artifact_writes={"plan": [("plan.md", "..."),
+                                       ("sections/section-1.md", "# one")]},  # -> run dir
+        )
+
+    A step id absent from `results` gets a generic ok result (`default_text`).
+    `question`/`defers` are always (re)derived from the final text via
+    `engine.protocol`, so a test only has to set `.text` (e.g. to a string
+    starting with "QUESTION:" or containing a "DEFER:" line) -- it never needs
+    to call the parser itself. A scripted result's `files_written` (when
+    non-empty) wins over the paths this call actually wrote to the workspace,
+    which is how a test forces the "landed outside the workspace" failure path.
+    Every `ExecRequest` is recorded, in call order, in `.requests`.
+    """
+
+    def __init__(
+        self,
+        results: dict[str, ExecResult] | None = None,
+        *,
+        writes: dict[str, WriteSpec] | None = None,
+        artifact_writes: dict[str, WriteSpec] | None = None,
+        default_text: str = "ok",
+    ) -> None:
+        self.results = dict(results or {})
+        self.writes = dict(writes or {})
+        self.artifact_writes = dict(artifact_writes or {})
+        self.default_text = default_text
+        self.requests: list[ExecRequest] = []
+
+    def describe(self) -> str:
+        return "fake executor"
+
+    def _write_entries(self, root: Path, spec: object, req: ExecRequest) -> list[Path]:
+        if spec is None:
+            return []
+        entries = spec(req) if callable(spec) else spec
+        written: list[Path] = []
+        for relpath, content in entries:
+            target = Path(root) / relpath
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if isinstance(content, bytes):
+                target.write_bytes(content)
+            else:
+                target.write_text(content, encoding="utf-8")
+            written.append(target)
+        return written
+
+    def run(self, req: ExecRequest) -> ExecResult:
+        self.requests.append(req)
+
+        written = self._write_entries(req.workspace, self.writes.get(req.step_id), req)
+        self._write_entries(req.artifacts_dir, self.artifact_writes.get(req.step_id), req)
+
+        scripted = self.results.get(req.step_id)
+        text = scripted.text if scripted is not None else self.default_text
+        usage = scripted.usage if scripted is not None else Usage(input_tokens=5, output_tokens=5)
+        files_written = (
+            scripted.files_written if (scripted is not None and scripted.files_written) else written
+        )
+        exit_code = scripted.exit_code if scripted is not None else 0
+        error = scripted.error if scripted is not None else None
+        timed_out = scripted.timed_out if scripted is not None else False
+
+        return ExecResult(
+            text=text,
+            usage=usage,
+            files_written=files_written,
+            question=_protocol.parse_question(text),
+            defers=_protocol.parse_defers(text),
+            exit_code=exit_code,
+            error=error,
+            timed_out=timed_out,
+        )
