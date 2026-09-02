@@ -5,7 +5,9 @@ sections append `FakeExecutor`, `FakeRuntime`, `FakeSource`, `FakeSink` here.
 from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
+from pathlib import Path
 
+from ticketbot.adapters.repos.base import CommitResult
 from ticketbot.adapters.runtimes.base import ExecOut
 from ticketbot.adapters.sinks.base import SinkError
 from ticketbot.core.workitem import Attachment, WorkItem
@@ -123,6 +125,72 @@ class FakeSource:
 
     def close(self) -> None:
         self.closed = True
+
+
+class FakeRepo:
+    """Satisfies the `Repo` protocol (`adapters.repos.base.Repo`); records every
+    call and returns canned results -- no real git subprocess, no network.
+    """
+
+    def __init__(
+        self,
+        *,
+        workspace: Path | None = None,
+        commit_shas: list[str | None] | None = None,
+        pr_url: str | None = "https://github.com/acme/app/pull/1",
+        missing: list[str] | None = None,
+    ) -> None:
+        self._workspace = workspace or Path("/fake/workspace")
+        self._commit_shas = list(commit_shas) if commit_shas is not None else ["deadbeef"]
+        self.pr_url = pr_url
+        self.missing = list(missing) if missing is not None else []
+        self.calls: list[tuple[str, tuple, dict]] = []
+        self.pushed = False
+        self.cleaned_up = False
+
+    def _record(self, name: str, *args: object, **kwargs: object) -> None:
+        self.calls.append((name, args, kwargs))
+
+    def describe(self) -> str:
+        self._record("describe")
+        return "fake/repo @ fake-branch"
+
+    def checkout(self, branch: str) -> Path:
+        self._record("checkout", branch)
+        return self._workspace
+
+    def workspace(self) -> Path:
+        self._record("workspace")
+        return self._workspace
+
+    def status(self) -> list[str]:
+        self._record("status")
+        return []
+
+    def diff(self, base: str | None = None) -> str:
+        self._record("diff", base)
+        return ""
+
+    def commit(self, message: str, body: str = "") -> CommitResult:
+        self._record("commit", message, body)
+        sha = self._commit_shas.pop(0) if self._commit_shas else None
+        return CommitResult(sha=sha, message=message, files=1 if sha else 0)
+
+    def push(self) -> None:
+        self._record("push")
+        self.pushed = True
+
+    def open_pr(self, title: str, body: str) -> str | None:
+        self._record("open_pr", title, body)
+        return self.pr_url
+
+    def cleanup(self) -> None:
+        self._record("cleanup")
+        self.cleaned_up = True
+
+    def verify_landed(self, paths: Sequence[Path | str]) -> list[str]:
+        self._record("verify_landed", paths)
+        return list(self.missing)
 
 
 class FakeSink:

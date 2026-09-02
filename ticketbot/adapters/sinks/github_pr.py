@@ -27,6 +27,33 @@ logger = logging.getLogger(__name__)
 _PR_URL_RE = re.compile(r"^https?://github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+)/pull/(?P<number>\d+)/?$")
 
 
+def github_rest_headers(token: str | None) -> dict[str, str]:
+    """Shared GitHub REST headers -- used by this sink and by the `github` repo
+    adapter (section 7) so the two GitHub clients can never diverge on auth/version
+    headers.
+    """
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def write_body_tempfile(body: str, *, suffix: str = ".md") -> str:
+    """Write `body` to a UTF-8, BOM-less, LF-newline temp file and return its path.
+
+    Shared by this sink's `gh pr comment --body-file` and the `github` repo
+    adapter's `gh pr create --body-file` so both call sites behave identically --
+    model-written text never reaches a command line inline. Caller deletes the file
+    (`Path(path).unlink(missing_ok=True)`).
+    """
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", newline="\n", suffix=suffix, delete=False) as f:
+        f.write(body)
+        return f.name
+
+
 class GithubPrSink:
     def __init__(
         self,
@@ -87,9 +114,7 @@ class GithubPrSink:
     def _comment_via_gh(self, gh: str, pr_url: str, body: str) -> None:
         # `--body-file`, never an inline body: both for PowerShell 5.1 quoting and
         # to avoid argv injection from model-written text.
-        with tempfile.NamedTemporaryFile("w", encoding="utf-8", newline="\n", suffix=".md", delete=False) as f:
-            f.write(body)
-            body_file = f.name
+        body_file = write_body_tempfile(body)
         try:
             result = subprocess.run(
                 [gh, "pr", "comment", pr_url, "--body-file", body_file],
@@ -113,12 +138,7 @@ class GithubPrSink:
     def _comment_via_rest(self, pr_url: str, body: str) -> None:
         owner, repo, number = self._parse_pr_url(pr_url)
         url = f"{self.api_url}/repos/{owner}/{repo}/issues/{number}/comments"
-        headers = {
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-        }
-        if self.token:
-            headers["Authorization"] = f"Bearer {self.token}"
+        headers = github_rest_headers(self.token)
         try:
             response = self._client.post(url, headers=headers, json={"body": body})
         except httpx.HTTPError as exc:
