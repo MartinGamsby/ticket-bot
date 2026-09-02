@@ -96,6 +96,32 @@ def test_config_init_writes_valid_profile_and_refuses_overwrite(tmp_path, capsys
     assert code == 0
 
 
+def test_config_banner_prints_redacted_banner_for_a_profile(capsys):
+    code = main(["config", "banner", str(FIXTURES / "minimal.yaml")])
+    captured = capsys.readouterr()
+
+    assert code == 0
+    assert "pipeline=builtin:pipelines/standard.yaml" in captured.out
+    assert "models=main:Claude Opus 5" in captured.out
+    assert "executor=api: main" in captured.out
+    assert "runtime=local_shell" in captured.out
+    assert "repo=git_local (.)" in captured.out
+    # no work item was supplied, so there is no "Using source=" line
+    assert "Using source=" not in captured.out
+
+
+def test_config_banner_invalid_profile_returns_2(tmp_path, capsys):
+    broken = tmp_path / "broken.yaml"
+    broken.write_text("name: broken\nsource: {type: file}\n", encoding="utf-8")
+
+    code = main(["config", "banner", str(broken)])
+    captured = capsys.readouterr()
+
+    assert code == 2
+    assert "Traceback" not in captured.err
+    assert captured.err.strip() != ""
+
+
 def test_config_list_skips_underscore_prefixed_files(tmp_path, capsys):
     profiles_dir = tmp_path / "profiles"
     profiles_dir.mkdir()

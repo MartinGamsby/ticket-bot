@@ -16,6 +16,7 @@ from pydantic import ValidationError
 
 from .config.loader import ConfigError, load_profile, load_profile_dict, resolved_yaml
 from .config.redact import redact
+from .core.banner import facts_from_profile, render_banner
 
 CONFIG_INIT_TEMPLATE = """\
 name: __NAME__
@@ -88,6 +89,23 @@ def _cmd_config_show(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_config_banner(args: argparse.Namespace) -> int:
+    """Load the profile, build BannerFacts via facts_from_profile(), print
+    redact(render_banner(facts))."""
+    try:
+        profile = load_profile(args.profile)
+    except ConfigError as e:
+        _print_load_error(f"invalid config {args.profile}", e)
+        return 2
+    except ValidationError as e:
+        _print_load_error(f"invalid profile {args.profile}", e)
+        return 2
+
+    facts = facts_from_profile(profile)
+    print(redact(render_banner(facts)), end="")
+    return 0
+
+
 def _cmd_config_init(args: argparse.Namespace) -> int:
     directory = Path(args.dir)
     directory.mkdir(parents=True, exist_ok=True)
@@ -120,6 +138,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_show = config_sub.add_parser("show", help="print the resolved profile as YAML")
     p_show.add_argument("profile", help="path to the profile YAML")
     p_show.set_defaults(func=_cmd_config_show)
+
+    p_banner = config_sub.add_parser("banner", help="print the 'what was used' banner for a profile")
+    p_banner.add_argument("profile", help="path to the profile YAML")
+    p_banner.set_defaults(func=_cmd_config_banner)
 
     p_init = config_sub.add_parser("init", help="scaffold a minimal offline profile")
     p_init.add_argument("name", help="profile name")
