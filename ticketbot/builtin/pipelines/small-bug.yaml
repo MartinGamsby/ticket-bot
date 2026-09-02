@@ -1,0 +1,22 @@
+name: small-bug
+# For a small, well-scoped bug fix: no clarify step (the ticket is short enough that
+# ambiguity is caught by intake's `ambiguity` field feeding the selector, not by a
+# dedicated round-trip), and no separate `security` step. `review` is merged into
+# `verify` -- the tester's existing "read plan.md + diff" pass and its "report any
+# source bug you found" Return-ONLY contract (see prompts/roles/tester.md) stand in
+# for a dedicated review; `fs.edit` lets it fix anything trivial it notices in
+# passing, same tool as the standard pipeline grants its `review` step.
+defaults: {executor: default, model: default, timeout_s: 900}
+steps:
+  - {id: intake,  role: ingest,   model: cheap, tools: [source.read], produces: [workitem.json]}
+  - {id: plan, role: planner, tools: [fs.read, fs.write, fs.list], produces: [plan.md, sections/], gate: optional_human}
+  - id: implement
+    role: coder
+    for_each: plan.sections
+    tools: [fs.read, fs.write, fs.edit, fs.list, shell.run]
+    isolation: worktree
+    commit: "impl: {section.title}"
+  - {id: verify,  role: tester,   tools: [fs.read, fs.write, fs.edit, shell.run, runtime.screenshot], produces: [test-report.md], commit: "test: {ticket_key}"}
+  - {id: publish, role: reporter, tools: [fs.read, fs.write, runtime.screenshot], produces: [pr.md, ticket_comment.md]}
+on_question: pause_and_relay
+on_defer: spawn_fixer

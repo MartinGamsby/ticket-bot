@@ -1,0 +1,26 @@
+name: _base
+version: 1
+model:
+  default: main
+  providers:
+    main:  {type: anthropic, model: claude-opus-5, effort: xhigh}
+    cheap: {type: anthropic, model: claude-haiku-4-5, effort: low}
+executor:
+  default: inline
+  kinds:
+    inline: {type: api, model: main, max_iterations: 40}
+runtime: {type: none}
+pipeline_selector:
+  rules:
+    - when: {story_points: {lte: 2}, issue_type: Bug}
+      use: builtin:pipelines/small-bug.yaml
+    - when: {story_points: {lte: 5}}
+      use: builtin:pipelines/standard.yaml
+    - when: {story_points: {gte: 8}}
+      use: builtin:pipelines/large-with-clarification.yaml
+  default: builtin:pipelines/standard.yaml
+gates: {on_unclear: comment_and_unassign, on_pr_ready: human_review, max_clarify_rounds: 2}
+budget: {max_cost_usd: 25, max_wall_clock_s: 5400}
+source: {type: file}
+sink:   {type: file}
+repo:   {type: git_local, path: "."}

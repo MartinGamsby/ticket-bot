@@ -1,0 +1,38 @@
+# The "any AI" proof. This file deliberately contains zero references to the
+# vendor and CLI used by the other example profiles -- every model here is
+# OpenAI-compatible (`openai_compat`, pointed at whatever ${MODEL_BASE_URL} serves)
+# and the default executor spawns Codex CLI (`codex exec`) via a plain `process`
+# kind, the same swap point that a different vendor's CLI would use instead. Sink
+# is a GitHub PR (with a file copy alongside it for local inspection) and the repo
+# is GitHub. Solari stays off -- inherited from _base's `runtime: {type: none}` --
+# to keep this profile's one swapped point (the model + executor vertical) legible
+# on its own.
+extends: _base.yaml
+name: github-codex
+version: 1
+
+source: {type: file}
+
+sink:
+  type: github_pr
+  also: [{type: file}]
+
+repo:
+  type: github
+  clone: git@github.com:acme/app.git
+  base_branch: main
+  branch_template: "agent/{ticket_key}-{slug}"
+  token: ${GITHUB_TOKEN}
+  draft_pr: true
+
+model:
+  default: main
+  providers:
+    main:  {type: openai_compat, base_url: "${MODEL_BASE_URL}", api_key: "${MODEL_API_KEY}", model: gpt-5}
+    cheap: {type: openai_compat, base_url: "${MODEL_BASE_URL}", api_key: "${MODEL_API_KEY}", model: gpt-5-mini}
+
+executor:
+  default: codex-cli
+  kinds:
+    codex-cli: {type: process, cmd: ["codex", "exec"], prompt: stdin, timeout_s: 1800}
+    inline:    {type: api, model: main, max_iterations: 40}

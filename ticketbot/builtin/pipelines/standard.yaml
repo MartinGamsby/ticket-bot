@@ -1,0 +1,22 @@
+name: standard
+defaults: {executor: default, model: default, timeout_s: 1800}
+steps:
+  - {id: intake,  role: ingest,   model: cheap, tools: [source.read], produces: [workitem.json]}
+  - id: clarify
+    role: clarifier
+    when: "workitem.acceptance is empty or workitem.ambiguity >= medium"
+    tools: [sink.comment, sink.unassign]
+    on_block: blocked
+  - {id: plan, role: planner, tools: [fs.read, fs.write, fs.list], produces: [plan.md, sections/], gate: optional_human}
+  - id: implement
+    role: coder
+    for_each: plan.sections
+    tools: [fs.read, fs.write, fs.edit, fs.list, shell.run]
+    isolation: worktree
+    commit: "impl: {section.title}"
+  - {id: verify,  role: tester,   tools: [fs.read, fs.write, fs.edit, shell.run, runtime.screenshot], produces: [test-report.md], commit: "test: {ticket_key}"}
+  - {id: review,  role: reviewer, model: peer, tools: [fs.read, fs.edit], produces: [review.md], commit: "review-fix: {ticket_key}"}
+  - {id: security, role: security, when: "plan.security == yes or diff.touches_security", tools: [fs.read, fs.edit], produces: [security.md], commit: "security-fix: {ticket_key}"}
+  - {id: publish, role: reporter, tools: [fs.read, fs.write, runtime.screenshot], produces: [pr.md, ticket_comment.md]}
+on_question: pause_and_relay
+on_defer: spawn_fixer

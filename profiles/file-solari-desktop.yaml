@@ -1,0 +1,14 @@
+# Same file source/sink as file-text-none.yaml, but with a real Solari desktop
+# runtime turned on -- proves the screenshot path (screenshot_on: [verify, publish])
+# with no Jira/GitHub involved. Needs SOLARI_API_KEY plus ANTHROPIC_API_KEY.
+extends: _base.yaml
+name: file-solari-desktop
+source: {type: file}
+sink:   {type: file}
+repo:   {type: git_local, path: ".", branch_template: "agent/{ticket_key}-{slug}"}
+runtime:
+  type: solari
+  mode: desktop
+  resolution: "1280x720"
+  timeout_ms: 600000
+  screenshot_on: [verify, publish]

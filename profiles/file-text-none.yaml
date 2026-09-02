@@ -1,0 +1,11 @@
+# The default, fully offline profile: text or a file in, runs/<id>/ out. No keys
+# beyond ANTHROPIC_API_KEY (used only when the default `main`/`cheap` providers are
+# actually invoked -- `ticketbot validate` needs no key at all, since `${ENV}` refs
+# are kept unexpanded until an adapter uses them). This is the profile the offline
+# end-to-end test drives.
+extends: _base.yaml
+name: file-text-none
+source: {type: file, glob: "inbox/*.md", processed_dir: "inbox/processed"}
+sink:   {type: file}
+repo:   {type: git_local, path: ".", branch_template: "agent/{ticket_key}-{slug}"}
+runtime: {type: none}
