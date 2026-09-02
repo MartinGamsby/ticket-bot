@@ -5,6 +5,12 @@ model:
   providers:
     main:  {type: anthropic, model: claude-opus-5, effort: xhigh}
     cheap: {type: anthropic, model: claude-haiku-4-5, effort: low}
+    # `builtin/pipelines/standard.yaml` and `large-with-clarification.yaml` send
+    # their `review` step to the `peer` slot. A profile with a real second vendor
+    # (see jira-claude-solari.yaml) overrides this with an `openai_compat`
+    # provider; without that override, review falls back to self-review with the
+    # same model as `main` rather than failing with "unknown model slot 'peer'".
+    peer:  {type: anthropic, model: claude-opus-5, effort: xhigh}
 executor:
   default: inline
   kinds:

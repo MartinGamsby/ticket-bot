@@ -1,5 +1,11 @@
 name: standard
-defaults: {executor: default, model: default, timeout_s: 1800}
+# `executor:`/`model:` are deliberately ABSENT here, not set to the string
+# "default" -- a step with no `executor:`/`model:` of its own passes `None` to
+# `Orchestrator._executor()`/`_provider()`, which is what actually triggers their
+# "fall back to `profile.executor.default`/`profile.model.default`" branch. The
+# literal string "default" is just another slot/kind NAME to look up and fails
+# for every shipped profile, none of which names a slot or kind "default".
+defaults: {timeout_s: 1800}
 steps:
   - {id: intake,  role: ingest,   model: cheap, tools: [source.read], produces: [workitem.json]}
   - id: clarify

@@ -6,7 +6,9 @@ name: small-bug
 # source bug you found" Return-ONLY contract (see prompts/roles/tester.md) stand in
 # for a dedicated review; `fs.edit` lets it fix anything trivial it notices in
 # passing, same tool as the standard pipeline grants its `review` step.
-defaults: {executor: default, model: default, timeout_s: 900}
+# `executor:`/`model:` are deliberately ABSENT -- see standard.yaml's comment on
+# `defaults:` for why the literal string "default" is not the right value here.
+defaults: {timeout_s: 900}
 steps:
   - {id: intake,  role: ingest,   model: cheap, tools: [source.read], produces: [workitem.json]}
   - {id: plan, role: planner, tools: [fs.read, fs.write, fs.list], produces: [plan.md, sections/], gate: optional_human}

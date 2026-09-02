@@ -6,7 +6,9 @@ name: large-with-clarification
 # writing plan.md; the engine saves that text to steps/research.md regardless of
 # the `produces:` hint below), the plan gate is mandatory (`gate: human`, not
 # `optional_human`), and both `review` and `security` run unconditionally.
-defaults: {executor: default, model: default, timeout_s: 2700}
+# `executor:`/`model:` are deliberately ABSENT -- see standard.yaml's comment on
+# `defaults:` for why the literal string "default" is not the right value here.
+defaults: {timeout_s: 2700}
 steps:
   - {id: intake,  role: ingest,   model: cheap, tools: [source.read], produces: [workitem.json]}
   - id: clarify

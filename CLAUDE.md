@@ -84,3 +84,48 @@ That regenerated form is still real data: commit it freely, never scrub or rever
 it out of a commit. See memory/tools/video-creation.md "Discovery cache + portable
 ledger".
 
+
+
+---
+
+# ticketbot
+
+Config-driven ticket -> PR agent runtime. A work item (text, file, or Jira issue) is run through a
+YAML pipeline of AI agent roles over a git repo, producing a PR, a short ticket comment, and
+screenshots.
+
+## Layout
+| Path | What lives there |
+|---|---|
+| `ticketbot/config/` | profile schema, YAML loader (`extends:`, `builtin:`, `${ENV}`), secret redaction |
+| `ticketbot/core/` | WorkItem, Run/RunStore, banner, templating, the safe `when:` predicate parser, registry |
+| `ticketbot/engine/` | pipeline + selector + gates + locks + budget + the orchestrator loop |
+| `ticketbot/executors/` | `process` (spawn a coding CLI) and `api` (our own tool loop) + the path-jailed tools |
+| `ticketbot/models/` | ModelProvider implementations — the ONLY place `anthropic` is imported |
+| `ticketbot/adapters/` | sources, sinks, runtimes, repos — one directory per swap point |
+| `ticketbot/builtin/` | shipped pipelines and role prompts |
+| `profiles/` | example profiles |
+
+## Conventions
+- Adapters are selected by a `type:` string resolved through `ticketbot/core/registry.py`. Adding one
+  means: a new module, one `register()` line, and its own option validation — never a change to
+  `config/schema.py`.
+- Secrets are `${ENV}` references, expanded at use time, `register_secret()`'d, and never written to
+  `config.resolved.yaml` or a log.
+- Subprocesses are always `shell=False` with an explicit argv list and an env allowlist.
+- Every filesystem tool goes through `executors/tools.py: jail()`.
+- `when:` expressions are parsed by `core/predicate.py`. **Never `eval`.**
+- A pipeline's `defaults:` block only ever holds real fallback VALUES (a real model slot name, a real
+  executor kind name, a timeout). It must never hold the literal string `"default"` for `executor:`/
+  `model:` — that string is not a sentinel anywhere in the code; the actual "fall back to the profile's
+  own default" behavior is triggered by OMITTING the key (so `step.model`/`step.executor` end up `None`
+  and `Orchestrator._provider()`/`_executor()` apply `profile.model.default`/`profile.executor.default`
+  themselves). This was a real bug fixed in section 10 — see `builtin/pipelines/standard.yaml`'s
+  `defaults:` comment before reintroducing it.
+- Nothing auto-merges. `gates.on_pr_ready: human_review` opens a draft PR and stops.
+- Tests are pytest, run with `uv run pytest`. No test may hit the network, spawn a real coding CLI, or
+  touch a real Jira/GitHub/Solari account.
+
+## Docs
+Keep `README.md` describing the CURRENT state of the system, not a changelog. When you add an adapter,
+add its row to the README's swap-point table and its env var to the install table.
