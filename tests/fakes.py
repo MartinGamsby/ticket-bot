@@ -4,7 +4,11 @@ sections append `FakeExecutor`, `FakeRuntime`, `FakeSource`, `FakeSink` here.
 
 from __future__ import annotations
 
+from collections.abc import Iterator, Sequence
+
 from ticketbot.adapters.runtimes.base import ExecOut
+from ticketbot.adapters.sinks.base import SinkError
+from ticketbot.core.workitem import Attachment, WorkItem
 from ticketbot.models.base import ProviderMessage, ToolCall
 from ticketbot.models.fake import FakeModelProvider
 
@@ -85,3 +89,78 @@ class FakeRuntime:
     def stop(self) -> None:
         self._record("stop")
         self.stopped = True
+
+
+class FakeSource:
+    """Satisfies the `Source` protocol (`adapters.sources.base.Source`) over a
+    fixed in-memory list of items -- no filesystem, no network.
+    """
+
+    def __init__(self, items: list[WorkItem]) -> None:
+        self.items = list(items)
+        self.claimed: list[str] = []
+        self.closed = False
+
+    def describe(self) -> str:
+        return "fake"
+
+    def fetch(self, external_id: str | None = None) -> WorkItem:
+        if external_id:
+            for item in self.items:
+                if item.key == external_id:
+                    return item
+            raise KeyError(f"fake source: no item with key {external_id!r}")
+        if self.items:
+            return self.items[0]
+        raise KeyError("fake source: no items")
+
+    def poll(self) -> Iterator[WorkItem]:
+        yield from self.items
+
+    def claim(self, item: WorkItem) -> bool:
+        self.claimed.append(item.key)
+        return True
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class FakeSink:
+    """Satisfies the `Sink` protocol (`adapters.sinks.base.Sink`); records every
+    call and can be told to raise `SinkError` on specific methods via `fail_on`,
+    for exercising `MultiSink`'s secondary-failure handling.
+    """
+
+    def __init__(self, fail_on: set[str] = frozenset()) -> None:
+        self.comments: list[tuple[str, str, tuple]] = []
+        self.transitions: list[tuple[str, str]] = []
+        self.unassigned: list[str] = []
+        self.links: list[tuple[str, str, str]] = []
+        self.fail_on: set[str] = set(fail_on)
+        self.closed = False
+
+    def describe(self) -> str:
+        return "fake"
+
+    def comment(self, item: WorkItem, markdown: str, attachments: Sequence[Attachment] = ()) -> None:
+        if "comment" in self.fail_on:
+            raise SinkError("fake sink: comment failing on purpose")
+        self.comments.append((item.key, markdown, tuple(attachments)))
+
+    def transition(self, item: WorkItem, state: str) -> None:
+        if "transition" in self.fail_on:
+            raise SinkError("fake sink: transition failing on purpose")
+        self.transitions.append((item.key, state))
+
+    def unassign(self, item: WorkItem) -> None:
+        if "unassign" in self.fail_on:
+            raise SinkError("fake sink: unassign failing on purpose")
+        self.unassigned.append(item.key)
+
+    def link(self, item: WorkItem, url: str, title: str) -> None:
+        if "link" in self.fail_on:
+            raise SinkError("fake sink: link failing on purpose")
+        self.links.append((item.key, url, title))
+
+    def close(self) -> None:
+        self.closed = True
