@@ -34,10 +34,12 @@ Jira Cloud REST v3. Options: `base_url`, `email`, `token`, `jql`, `poll_seconds`
 `account_id`, `in_progress_status` (default `"In Progress"`).
 
 `JiraConnection` is the ONE place the Jira `httpx.Client` is built (basic auth from `email`/`token`);
-`JiraSink` reuses it. Credentials — including `base_url` — are expanded and `register_secret()`'d at
-construction; the `Authorization` header is never read back or logged. Every non-2xx raises with the
-status, Jira's `errorMessages` when present, and a redacted body snippet, and carries `status_code`
-so callers can special-case 404.
+`JiraSink` reuses it. `email` and `token` are expanded and `register_secret()`'d at construction;
+`base_url` deliberately is NOT — a tenant host is not a credential, and it is a substring of every
+`{base_url}/browse/KEY` ticket URL, so registering it rewrote that URL to `***REDACTED***` in every
+artifact and would now corrupt the outbound ticket comment. The `Authorization` header is never read
+back or logged. Every non-2xx raises with the status, Jira's `errorMessages` when present, and a
+redacted body snippet, and carries `status_code` so callers can special-case 404.
 
 - `fetch(key)` requires a key; a 404 becomes `WorkItemNotFound`.
 - `poll()` POSTs `/search/jql` and pages via `nextPageToken`.

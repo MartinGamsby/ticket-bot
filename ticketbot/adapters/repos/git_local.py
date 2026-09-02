@@ -22,6 +22,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from secrets import token_hex
 
+from ...config.redact import redact
 from ...config.schema import AdapterConfig
 from ...core.templating import render
 from ...core.workitem import WorkItem
@@ -269,10 +270,16 @@ class GitLocalRepo:
     # ------------------------------------------------------------------ #
 
     def _compose_message(self, message: str, body: str) -> str:
+        """The composed message is `redact()`ed: `body` is the step's own returned
+        text (model-written) and `message` is a rendered `commit:` template that can
+        carry a model-written section title. `GithubRepo.push()` publishes these
+        commits, so a credential quoted into a step's summary would otherwise land
+        in the branch history where it cannot be un-published.
+        """
         text = f"{message}\n\n{body}\n" if body else f"{message}\n"
         if self.coauthor_trailer and COAUTHOR_TRAILER not in text:
             text = text.rstrip("\n") + "\n\n" + COAUTHOR_TRAILER + "\n"
-        return text
+        return redact(text)
 
     def commit(self, message: str, body: str = "") -> CommitResult:
         ws = self.workspace()

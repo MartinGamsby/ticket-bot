@@ -321,3 +321,53 @@ def test_module_source_contains_no_merge_or_force_push():
     assert "auto-merge" not in lowered
     assert "--auto" not in lowered
     assert "--force" not in lowered
+
+
+# ---- outbound redaction ----------------------------------------------------------
+
+
+def test_open_pr_redacts_title_and_body_before_they_leave_the_machine(git_repo, monkeypatch):
+    """`title` is built from untrusted ticket text and `body` from the reporter's
+    model-written `pr.md`; a pull request is world-readable on a public repo."""
+    from ticketbot.config import redact as redact_module
+
+    monkeypatch.setattr(redact_module, "_default", redact_module.Redactor())
+    redact_module.register_secret("supersecretvalue123")
+
+    _add_self_origin(git_repo)
+    client, captured = _client_and_capture(json_body={"html_url": "https://github.com/acme/app/pull/7"})
+    repo = GithubRepo(
+        _cfg(clone="git@github.com:acme/app.git", path=str(git_repo), prefer_gh=False),
+        client=client,
+    )
+    repo.checkout("agent/eng-1")
+    url = repo.open_pr("ENG-1: leak supersecretvalue123", "body ghp_aaaaaaaaaaaaaaaaaaaaaaaa")
+
+    assert url == "https://github.com/acme/app/pull/7"
+    assert "supersecretvalue123" not in captured["json"]["title"]
+    assert "ghp_" not in captured["json"]["body"]
+
+
+def test_commit_message_is_redacted(git_repo, monkeypatch):
+    """`push()` publishes these commits: a credential in a step's summary would
+    otherwise land in branch history where it cannot be un-published."""
+    from ticketbot.config import redact as redact_module
+
+    monkeypatch.setattr(redact_module, "_default", redact_module.Redactor())
+    redact_module.register_secret("supersecretvalue123")
+
+    _add_self_origin(git_repo)
+    repo = GithubRepo(
+        _cfg(clone="git@github.com:acme/app.git", path=str(git_repo), prefer_gh=False),
+    )
+    ws = repo.checkout("agent/eng-2")
+    (ws / "new.txt").write_text("x", encoding="utf-8")
+    result = repo.commit("impl: work", body="the key was supersecretvalue123")
+
+    assert result.sha is not None
+    message = subprocess.run(
+        ["git", "-C", str(ws), "log", "-1", "--format=%B"],
+        capture_output=True, text=True, check=True,
+    ).stdout
+    assert "supersecretvalue123" not in message
+    assert redact_module.REDACTED in message

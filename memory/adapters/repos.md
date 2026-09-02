@@ -10,6 +10,11 @@ names, commit messages and PR bodies all trace back to untrusted ticket text or 
 non-zero exit with `check=True` it raises `RepoError` naming the argv and the exit code, with
 `redact(stderr)`, and never the child environment.
 
+Outbound text is scrubbed as well as errors: `GitLocalRepo._compose_message` redacts the whole commit
+message (`push()` publishes it, and branch history cannot be un-published) and `GithubRepo.open_pr`
+redacts the PR title and body. See
+[../config/secrets-and-redaction.md](../config/secrets-and-redaction.md).
+
 ## `GitLocalRepo` — `adapters/repos/git_local.py`
 
 Options: `path` (default `"."`, resolved against `base_dir`), `base_branch`, `branch_template`

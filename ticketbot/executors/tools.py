@@ -20,11 +20,24 @@ of them, which leaves `plan.sections` empty and fails the run. A relative path i
 still resolved against the workspace first, so nothing that used to land in the
 repo now lands in the run dir instead.
 
+Admitting the run dir does not admit the RUN RECORD: `_reject_reserved_artifact()`
+refuses a write to `run.json`, `config.resolved.yaml`, `workitem.json`,
+`banner.txt` or anything under `logs/`. Those are the engine's own files — one is
+read back on resume and the rest are the audit trail of what a step did — and no
+role prompt ever asks a model to write one.
+
 `shell.run` is the other hot spot: `shell=False` always, argv only, and it only
 runs at all when `"shell.run"` is in the step's tool allowlist (`ctx.allow`) — a
 model asking for a tool it was not granted gets a `ToolError`, not an execution.
 That allowlist check lives in `dispatch()` and applies to every tool, not just
 `shell.run`: a name outside `ctx.allow` never reaches its handler.
+
+**Scope of the allowlist.** It binds the `api` executor and nothing else. A
+`process` executor spawns a whole coding CLI, which brings its OWN tools and never
+consults `ExecRequest.tools` — so under a profile whose steps run on `process`
+(`profiles/jira-claude-solari.yaml`, `profiles/github-codex.yaml`), "the clarifier
+gets no filesystem tools" is NOT true. Containment there is whatever the spawned
+CLI enforces for itself.
 """
 
 from __future__ import annotations
@@ -50,6 +63,13 @@ MAX_LIST_ENTRIES = 500
 # Tool names the orchestrator implements from the step's returned text, not here.
 # Present in the catalogue conceptually, but build_tools() skips them silently.
 _SINK_ONLY_NAMES = {"sink.comment", "sink.unassign"}
+
+# Run-dir paths that belong to the ENGINE, not to a step. See
+# `_reject_reserved_artifact`. Relative to `ctx.artifacts_dir`, posix-separated.
+RESERVED_RUN_DIR_FILES = frozenset(
+    {"run.json", "run.json.tmp", "config.resolved.yaml", "workitem.json", "banner.txt"}
+)
+RESERVED_RUN_DIR_DIRS = frozenset({"logs"})
 
 
 class ToolError(Exception):
@@ -137,6 +157,39 @@ def _jailed(ctx: ToolContext, candidate: str) -> Path:
             raise ToolError(f"path escapes the workspace: {candidate!r}") from None
 
 
+def _reject_reserved_artifact(ctx: ToolContext, path: Path, label: str) -> None:
+    """Refuse a WRITE that lands on one of the engine's own run-dir files.
+
+    Admitting `ctx.artifacts_dir` as a jail root is what lets a role prompt write
+    `{plan_file}`, `{sections_dir}/section-N.md` and `{run_dir}/pr.md` — but it
+    also handed every step with `fs.write`/`fs.edit` the run's AUDIT RECORD. The
+    names below are written by the engine and read back by it (`run.json` on
+    resume) or kept as the record of what actually happened; no role prompt ever
+    asks a model to touch one, so refusing them costs nothing:
+
+      run.json / run.json.tmp   the resumable state `RunStore.load()` trusts
+      config.resolved.yaml      which (redacted) profile the run actually used
+      workitem.json             the ticket as fetched, before any step ran
+      banner.txt                the "what was used" record printed at start
+      logs/**                   the per-step tool/stdout trace, appended to —
+                                a truncating write erases the evidence of what
+                                the step just did
+
+    `pr.md`, `ticket_comment.md`, `plan.md`, `sections/` and `steps/` stay writable
+    on purpose: those ARE the model's deliverables.
+    """
+    artifacts = Path(ctx.artifacts_dir).resolve(strict=False) if ctx.artifacts_dir else None
+    if artifacts is None:
+        return
+    try:
+        rel = path.relative_to(artifacts)
+    except ValueError:
+        return  # not in the run dir at all -- it is a workspace write
+    posix = rel.as_posix()
+    if posix in RESERVED_RUN_DIR_FILES or posix.split("/", 1)[0] in RESERVED_RUN_DIR_DIRS:
+        raise ToolError(f"{label}: {posix} is written by the engine and is not writable by a step")
+
+
 def _log(ctx: ToolContext, message: str) -> None:
     if ctx.log is not None:
         ctx.log(message)
@@ -214,6 +267,7 @@ def _fs_write(ctx: ToolContext, args: dict) -> str:
         )
 
     path = _jailed(ctx, rel)
+    _reject_reserved_artifact(ctx, path, "fs.write")
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8", newline="\n") as f:
         f.write(content)
@@ -232,6 +286,7 @@ def _fs_edit(ctx: ToolContext, args: dict) -> str:
         raise ToolError("fs.edit requires a non-empty 'old' string")
 
     path = _jailed(ctx, rel)
+    _reject_reserved_artifact(ctx, path, "fs.edit")
     if not path.is_file():
         raise ToolError(f"not a file: {rel!r}")
 

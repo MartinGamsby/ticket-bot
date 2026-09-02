@@ -50,7 +50,10 @@ def build_context(
         # say `story_points` / `issue_type` / `labels` / `size` / `ambiguity` directly
         **workitem_ctx,
         "plan": {
-            "security": run.extra.get("plan_security", "no"),
+            # "yes" before the planner has run, matching `_after_planner`'s
+            # fail-closed default: an unset `plan_security` means "nobody has
+            # assessed this yet", and a security gate must not read that as "no".
+            "security": run.extra.get("plan_security", "yes"),
             "sections": run.extra.get("section_count", 0),
         },
         "diff": {

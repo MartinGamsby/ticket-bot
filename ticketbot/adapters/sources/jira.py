@@ -50,7 +50,12 @@ class JiraConnection:
         base_url = expand_env(str(cfg.opt("base_url", "")))
         email = expand_env(str(cfg.opt("email", "")))
         token = expand_env(str(cfg.opt("token", "")))
-        register_secret(base_url)
+        # `email` and `token` are the credential pair and are registered. The
+        # `base_url` deliberately is NOT: it is the tenant's public host, it is a
+        # substring of every ticket URL (`{base_url}/browse/KEY`), and registering
+        # it as a literal secret rewrites that URL to `***REDACTED***` in every
+        # artifact -- and, now that outbound comments are scrubbed too, in the
+        # comment posted back to the ticket. A host name is not a credential.
         register_secret(email)
         register_secret(token)
 

@@ -148,7 +148,12 @@ class OpenAICompatProvider:
         try:
             response = self._client.post(url, headers=headers, json=body)
         except httpx.HTTPError as e:
-            raise ProviderError(f"openai_compat: request to {self.model!r} failed: {e}") from e
+            # `redact()` like every other adapter's transport-error path: an httpx
+            # error message can quote the failing request, and `base_url` may carry
+            # a credential in its userinfo or query for some gateways.
+            raise ProviderError(
+                f"openai_compat: request to {self.model!r} failed: {redact(str(e))}"
+            ) from e
 
         if response.status_code >= 300:
             snippet = redact(response.text[:500])

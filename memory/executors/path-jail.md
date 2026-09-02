@@ -56,6 +56,32 @@ all the way into `ToolContext.artifacts_dir` — where no filesystem tool ever c
 The offline end-to-end test missed it because `FakeExecutor` wrote its run-dir artifacts with
 `Path.write_text` directly, never through the jail. See [../testing/summary.md](../testing/summary.md).
 
+## Admitting the run dir does not admit the run RECORD
+
+`_reject_reserved_artifact(ctx, path, label)` runs on every `fs.write`/`fs.edit` whose resolved path
+lands inside `ctx.artifacts_dir`, and refuses:
+
+| Reserved | Why |
+|---|---|
+| `run.json`, `run.json.tmp` | the resumable state `RunStore.load()` trusts |
+| `config.resolved.yaml` | which (redacted) profile the run actually used |
+| `workitem.json` | the ticket as fetched, before any step ran |
+| `banner.txt` | the "what was used" record printed at start |
+| `logs/**` | the per-step tool/stdout trace — `append_log` only ever APPENDS, so one truncating write erases what the step just did |
+
+Without it, any step holding `fs.write` could rewrite its own audit trail: ticket text steering the
+`implement` step to blank `{run_dir}/logs/implement.log` after acting leaves a run that still reports
+OK with no record of the tool calls it made.
+
+`plan.md`, `sections/`, `steps/`, `pr.md` and `ticket_comment.md` stay writable — they ARE the
+deliverables. A `run.json` inside the WORKSPACE is an ordinary source file and is untouched by this;
+the check is keyed on the path resolving under the artifacts dir, not on the name alone.
+
+Still open: `pr.md`/`ticket_comment.md` are writable by any step, not only the reporter, so an
+injected earlier step can pre-decide what gets posted to the ticket. The outbound `redact()` in
+[../config/secrets-and-redaction.md](../config/secrets-and-redaction.md) covers the credential half
+of that; restricting a run-dir path by step role is not implemented.
+
 ## The other half of the rule
 
 Admitting the run dir does NOT mean run-dir writes count as workspace edits. `ApiLoopExecutor._finish`

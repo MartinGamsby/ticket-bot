@@ -43,7 +43,18 @@ advertised; and no exception escapes — a bad tool call becomes a `tool_result`
 that the model can recover from. Both the result and the error text are redacted.
 
 The allowlist is why the clarifier gets no filesystem tools and the reviewer/security roles never get
-`shell.run`.
+`shell.run` — **under the `api` executor, and only there.**
+
+### Scope: the allowlist does not bind `process`
+
+`ProcessExecutor` spawns a whole coding CLI, which brings its OWN tools and never reads
+`ExecRequest.tools`. Under a profile whose steps run on a `process` kind — `jira-claude-solari.yaml`
+and `github-codex.yaml` both default to one — every role, the clarifier included, gets a full CLI
+driven by a prompt built from untrusted ticket text, and containment is whatever that CLI enforces
+for itself. Do not read "the clarifier gets no filesystem tools" as a property of the system; it is a
+property of `executors/tools.py`. Closing the gap means translating catalogue names into per-CLI
+permission flags (`--allowedTools`, sandbox modes), which is CLI-specific — see
+[../known-gaps.md](../known-gaps.md).
 
 ## `shell.run` and the runtime
 

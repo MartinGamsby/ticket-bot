@@ -35,6 +35,23 @@ Decide deliberately. Do not assume the templates are live.
   out of contract (the engine assumes it owns the clone for the duration) and the error names the
   paths, so it is diagnosable — but it is the one way this check can be wrong.
   See [adapters/repos.md](adapters/repos.md).
+- **The per-step tool allowlist binds the `api` executor only.** `ProcessExecutor` spawns a coding
+  CLI that brings its own tools and never reads `ExecRequest.tools`, so under `jira-claude-solari.yaml`
+  and `github-codex.yaml` (both default to a `process` kind) the `clarify` step's
+  `tools: [sink.comment, sink.unassign]` and the `review`/`security` steps' absence of `shell.run`
+  enforce nothing — every role gets a full CLI on a prompt built from untrusted ticket text.
+  Containment there is whatever the spawned CLI does for itself. Closing it means mapping catalogue
+  names onto per-CLI permission flags (`--allowedTools`, sandbox modes), which is CLI-specific and a
+  real design decision, not a refactor. See [executors/tools.md](executors/tools.md).
+- **`DEFAULT_PASSTHROUGH` forwards the D-Bus session to every spawned CLI.**
+  `DBUS_SESSION_BUS_ADDRESS` + `XDG_RUNTIME_DIR` are what make a Linux Secret Service keyring
+  reachable at all — without them a keyring-authenticated CLI starts unauthenticated, which is why
+  they are there. They are also not "non-secret locators" in the sense the rest of that list is: they
+  are a capability handle to the user's whole UNLOCKED keyring, so a prompt-injected CLI can read
+  every secret in it, not just its own entry. Moving them out of the default into a per-profile
+  `env_passthrough:` — the same "visible, per-profile decision" rule already applied to API keys —
+  would close it at the cost of Linux keyring auth. Needs an explicit call on whether that path is
+  supported; do not flip it silently either way.
 - **`env_passthrough:` on the `local_shell` runtime does not register secrets.**
   `ProcessExecutor._build_env` `register_secret()`s a forwarded name that reads like a credential;
   `LocalShellRuntime._build_env` does not. It runs the project's own `shell.run` commands rather than

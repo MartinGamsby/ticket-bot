@@ -76,7 +76,7 @@ Details that matter:
 | Hook | Does |
 |---|---|
 | `_after_ingest` | parse the JSON envelope, fill `item.acceptance`/`item.ambiguity`, rewrite `workitem.json` |
-| `_after_planner` | count `sections/section-*.md` into `run.extra["section_count"]`, scrape `Security: yes|no` from `plan.md` into `["plan_security"]` |
+| `_after_planner` | count `sections/section-*.md` into `run.extra["section_count"]`, scrape `Security: yes|no` from `plan.md` into `["plan_security"]` — **absent marker or absent file ⇒ `"yes"`**, see [../pipelines/predicates.md](../pipelines/predicates.md) |
 | `_before_review` | write `patch.diff`, set the `diff.*` context facts |
 | `_after_reporter` | push, open the PR, hand the URL to the sinks, post the comment — see [reporting.md](reporting.md) |
 

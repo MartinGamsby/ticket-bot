@@ -56,6 +56,33 @@ instance still isolates correctly.
 | repo/sink/source adapters | `redact()` on any HTTP body snippet or `git`/`gh` stderr in an error |
 | CLI | `redact()` on the banner, on `config show` output, and on every printed error |
 
+## Outbound content is scrubbed too, not just errors and local writes
+
+Everything above except the last two rows writes LOCALLY. The paths that leave the machine carry
+model-written text — the reporter's `ticket_comment.md`, a `QUESTION:` block, `pr.md`, a step's
+returned summary as a commit body — and a ticket or a public PR is readable by whoever filed the
+work item. Scrubbing the local copy while posting the identical string in the clear made the remote
+copy the leakiest artifact in the system, so each outbound boundary scrubs:
+
+| Boundary | Scrubs |
+|---|---|
+| `JiraSink.comment` | the comment body, **before** `markdown_to_adf` |
+| `JiraSink.link` | the remote-link url and title |
+| `GithubPrSink.comment` | the comment body (after the attachment refs are appended) |
+| `GithubRepo.open_pr` | the PR title and body |
+| `GitLocalRepo._compose_message` | the whole commit message — `push()` publishes it |
+
+**Order matters for Jira.** Scrub BEFORE the ADF conversion, never after. Scrubbing the finished ADF
+tree keeps the `***REDACTED***` marker intact as literal text (after the conversion it is re-read as
+markdown bold and lands as a `strong` node saying `REDACTED`), but it is defeatable: `adf.py`'s
+`_INLINE` splits on `*` and `_`, so a `github_pat_…` or `sk-proj-…` token is already broken across
+several text nodes by then and no pattern matches either half.
+
+**A base URL is not a credential.** `JiraConnection` registers `email` and `token` only. The tenant
+host is a substring of every `{base_url}/browse/KEY` ticket URL, so registering it as a literal
+secret rewrote that URL to `***REDACTED***` in artifacts — and, now that comments are scrubbed,
+would corrupt the comment posted back to the ticket.
+
 ## Other handling rules
 
 - `run_git()` error messages name the argv and the exit code, never the child environment.

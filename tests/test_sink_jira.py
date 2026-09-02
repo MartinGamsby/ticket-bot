@@ -210,3 +210,67 @@ def test_non_2xx_raises_sink_error_without_leaking_credentials():
 def test_describe_includes_host():
     sink = JiraSink(_cfg(), client=_client(lambda r: httpx.Response(200, json={})))
     assert sink.describe() == "jira (acme.atlassian.net)"
+
+
+# ---- outbound redaction ----------------------------------------------------------
+
+
+def test_comment_body_is_redacted_before_it_reaches_jira(monkeypatch):
+    """A ticket is readable by whoever filed it. The comment body is model-written
+    text, so a credential quoted into it must be masked on the way out -- exactly
+    as `FileSink` already masks the same text on the way to disk.
+    """
+    from ticketbot.config import redact as redact_module
+
+    monkeypatch.setattr(redact_module, "_default", redact_module.Redactor())
+    redact_module.register_secret("supersecretvalue123")
+
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["json"] = json.loads(request.content)
+        return httpx.Response(201, json={"id": "1"})
+
+    sink = JiraSink(_cfg(), client=_client(handler))
+    sink.comment(_item(), "the key is supersecretvalue123 and also sk-ant-aaaaaaaaaaaaaaaaaaaa")
+
+    text = json.dumps(captured["json"])
+    assert "supersecretvalue123" not in text
+    assert "sk-ant-" not in text
+    # The scrub runs BEFORE markdown_to_adf, so the `***REDACTED***` marker is then
+    # re-read as markdown bold and lands as a `strong` text node saying "REDACTED".
+    # That ordering is deliberate -- see JiraSink.comment's docstring: scrubbing the
+    # finished ADF instead would miss a token the inline parser had already split on
+    # its own `_`/`*` characters.
+    assert "REDACTED" in text
+
+
+def test_a_secret_containing_markdown_inline_characters_is_still_scrubbed():
+    """The reason the scrub precedes `markdown_to_adf`: `github_pat_...` contains
+    underscores the inline parser reads as italic delimiters, so a post-conversion
+    scrub would be looking at two halves of a token that no pattern matches.
+    """
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["json"] = json.loads(request.content)
+        return httpx.Response(201, json={"id": "1"})
+
+    sink = JiraSink(_cfg(), client=_client(handler))
+    sink.comment(_item(), "leaked github_pat_11ABCDEFG0aaaaaaaaaaaa_bbbbbbbbbbbb here")
+
+    text = json.dumps(captured["json"])
+    assert "github_pat_" not in text
+
+
+def test_base_url_is_not_registered_as_a_secret(monkeypatch):
+    """The tenant host is a substring of every `{base_url}/browse/KEY` ticket URL.
+    Registering it as a literal secret rewrote that URL to `***REDACTED***` in
+    artifacts and, now that comments are scrubbed, in the comment itself.
+    """
+    from ticketbot.config import redact as redact_module
+
+    monkeypatch.setattr(redact_module, "_default", redact_module.Redactor())
+    JiraSink(_cfg(), client=_client(lambda r: httpx.Response(200, json={})))
+
+    assert redact_module.redact(f"see {BASE_URL}/browse/ENG-1") == f"see {BASE_URL}/browse/ENG-1"

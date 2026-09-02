@@ -12,6 +12,7 @@ from collections.abc import Sequence
 
 import httpx
 
+from ...config.redact import redact
 from ...config.schema import AdapterConfig
 from ...core.workitem import Attachment, WorkItem
 from ..sources.jira import JIRA_API_PREFIX, JiraConnection, find_transition
@@ -38,6 +39,20 @@ class JiraSink:
         """Uploads each attachment FIRST (so the comment can reference them), then
         posts the comment. An attachment upload failure is logged and appended to
         the comment as a line rather than aborting the comment.
+
+        The body is `redact()`ed on the way out. This text is model-written (the
+        reporter's `ticket_comment.md`, or a `QUESTION:` block) and a ticket is
+        readable by everyone who can see the issue -- including whoever filed it.
+        `FileSink` already scrubs the same text before writing it locally; posting
+        it unscrubbed to the tracker would make the remote copy the leakiest one.
+
+        **Scrub BEFORE `markdown_to_adf`, never after.** Scrubbing the finished ADF
+        tree would look tidier -- the `***REDACTED***` marker survives as literal
+        text instead of being re-read as markdown bold -- but it is defeatable: the
+        inline parser splits on `*` and `_`, so a `github_pat_...` or `sk-proj-...`
+        token would already have been broken across several text nodes by the time
+        the scrub ran, and no pattern would match either half. The cosmetic cost of
+        a bolded `REDACTED` is the price of a scrub that cannot be split.
         """
         key = item.key
         failure_notes: list[str] = []
@@ -53,7 +68,7 @@ class JiraSink:
             "POST",
             f"{JIRA_API_PREFIX}/issue/{key}/comment",
             error_cls=SinkError,
-            json={"body": markdown_to_adf(body)},
+            json={"body": markdown_to_adf(redact(body))},
         )
 
     def _upload_attachment(self, key: str, attachment: Attachment) -> None:
@@ -95,7 +110,7 @@ class JiraSink:
             "POST",
             f"{JIRA_API_PREFIX}/issue/{item.key}/remotelink",
             error_cls=SinkError,
-            json={"object": {"url": url, "title": title}},
+            json={"object": {"url": redact(url), "title": redact(title)}},
         )
 
     def close(self) -> None:

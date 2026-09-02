@@ -436,3 +436,70 @@ def test_wire_name_maps_dots_to_underscores():
 
 def test_from_wire_maps_underscores_to_dots():
     assert from_wire("fs_read") == "fs.read"
+
+
+# --------------------------------------------------------------------------- #
+# the engine's own run-dir files are not writable by a step
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "reserved",
+    ["run.json", "run.json.tmp", "config.resolved.yaml", "workitem.json", "banner.txt",
+     "logs/implement.log", "logs/nested/deep.log"],
+)
+def test_fs_write_refuses_engine_owned_run_dir_paths(tmp_path, reserved):
+    """Admitting the run dir as a jail root must not hand a step the run RECORD:
+    `run.json` is what `resume` trusts and `logs/` is the trace of what the step
+    just did (a truncating write would erase it).
+    """
+    ctx = _ctx(tmp_path, allow={"fs.write"})
+    _, dispatch = build_tools(["fs.write"], ctx)
+
+    out, is_err = dispatch("fs_write", {"path": str(ctx.artifacts_dir / reserved), "content": "x"})
+
+    assert is_err is True
+    assert "written by the engine" in out
+    assert not (ctx.artifacts_dir / reserved).exists()
+    assert ctx.files_written == []
+
+
+def test_fs_edit_refuses_engine_owned_run_dir_paths(tmp_path):
+    ctx = _ctx(tmp_path, allow={"fs.edit"})
+    target = ctx.artifacts_dir / "run.json"
+    target.write_text('{"id": "r1"}', encoding="utf-8")
+    _, dispatch = build_tools(["fs.edit"], ctx)
+
+    out, is_err = dispatch("fs_edit", {"path": str(target), "old": "r1", "new": "hacked"})
+
+    assert is_err is True
+    assert target.read_text(encoding="utf-8") == '{"id": "r1"}'
+
+
+@pytest.mark.parametrize(
+    "deliverable", ["plan.md", "pr.md", "ticket_comment.md", "sections/section-1.md", "steps/plan.md"]
+)
+def test_fs_write_still_allows_the_role_prompts_run_dir_deliverables(tmp_path, deliverable):
+    """The reserved set must not catch the artifacts the role prompts are told to
+    write -- that is the defect the artifacts-dir jail root exists to fix.
+    """
+    ctx = _ctx(tmp_path, allow={"fs.write"})
+    _, dispatch = build_tools(["fs.write"], ctx)
+
+    out, is_err = dispatch("fs_write", {"path": str(ctx.artifacts_dir / deliverable), "content": "hi"})
+
+    assert is_err is False, out
+    assert (ctx.artifacts_dir / deliverable).read_text(encoding="utf-8") == "hi"
+
+
+def test_reserved_names_do_not_shadow_a_workspace_file_of_the_same_name(tmp_path):
+    """`run.json` INSIDE the repo being worked on is an ordinary source file --
+    only the copy under the run dir is the engine's.
+    """
+    ctx = _ctx(tmp_path, allow={"fs.write"})
+    _, dispatch = build_tools(["fs.write"], ctx)
+
+    out, is_err = dispatch("fs_write", {"path": "run.json", "content": "{}"})
+
+    assert is_err is False, out
+    assert (ctx.workspace / "run.json").read_text(encoding="utf-8") == "{}"

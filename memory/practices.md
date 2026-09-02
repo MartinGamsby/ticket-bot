@@ -13,7 +13,9 @@ defects this codebase hit; they are the reason this Memory exists.
    `models/openai_compat.py`. The one deliberate direct import in the orchestrator is `FileSource`,
    so `--input-text`/`--input` can override the configured source.
 3. **Secrets are `${ENV}` references only.** Expanded at use time by the adapter that needs them,
-   `register_secret()`'d immediately, never written to `config.resolved.yaml` or a log.
+   `register_secret()`'d immediately, never written to `config.resolved.yaml` or a log — and never
+   posted outward either: the Jira comment, the GitHub PR comment, the PR title/body and the commit
+   message are all `redact()`ed, because a ticket is readable by whoever filed it.
    See [config/secrets-and-redaction.md](config/secrets-and-redaction.md).
 4. **`shell=False`, always, with an argv list and an env allowlist.** Never a composed shell string,
    never `os.environ` passed through wholesale. Applies to `ProcessExecutor`, `LocalShellRuntime`,
@@ -59,3 +61,5 @@ defects this codebase hit; they are the reason this Memory exists.
 | `RunStore` scrubbed with a private, empty `Redactor`, so registered secrets reached run artifacts | Anything that scrubs without calling `redact()` must take `default_redactor()` | [config/secrets-and-redaction.md](config/secrets-and-redaction.md) |
 | The orchestrator and `FileSink` both owned `ticket_comment.md`, so the headline artifact held the comment twice | The engine writes the canonical artifact AFTER the sink call, in a `finally` | [engine/reporting.md](engine/reporting.md) |
 | `source.read` returned `""` because nothing filled `ToolContext.work_item_text` | The engine fills `ExecRequest.work_item_text`; executors never see a `WorkItem` | [executors/tools.md](executors/tools.md) |
+| Every LOCAL write was scrubbed while the identical text went to Jira/GitHub/git history in the clear, making the world-readable copy the leakiest one | Redaction is a property of the BOUNDARY, not of the filesystem: scrub at every point text leaves the machine | [config/secrets-and-redaction.md](config/secrets-and-redaction.md) |
+| A security gate read from model output defaulted to "off" when the marker was absent, so *omitting* a line disabled the security step more cheaply than lying in one | A gate fed by model output fails CLOSED: absent means unknown, and unknown runs the check | [pipelines/predicates.md](pipelines/predicates.md) |

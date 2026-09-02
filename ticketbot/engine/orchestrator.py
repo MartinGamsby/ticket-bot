@@ -1133,8 +1133,16 @@ class Orchestrator:
         count = len(list(sections_dir.glob("section-*.md"))) if sections_dir.is_dir() else 0
         run.extra["section_count"] = count
 
+        # FAIL CLOSED. `plan.security` gates the `security` step
+        # (`when: "plan.security == yes or diff.touches_security"`), and the value
+        # is scraped out of a file the PLANNER wrote -- i.e. out of model output
+        # shaped by untrusted ticket text. Defaulting to "no" meant a planner that
+        # simply omitted the `Security:` line, or wrote no plan.md at all, silently
+        # skipped the security review; omitting a line is a far cheaper way to
+        # disable that step than lying in it. Only an EXPLICIT "no" turns the step
+        # off now; absence means "unknown", which runs it.
         plan_path = run_dir / "plan.md"
-        security = "no"
+        security = "yes"
         if plan_path.is_file():
             text = plan_path.read_text(encoding="utf-8", errors="replace")
             m = _PLAN_SECURITY_RE.search(text)

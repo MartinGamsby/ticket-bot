@@ -566,3 +566,59 @@ def test_step_artifact_text_is_redacted(tmp_path: Path, git_repo: Path) -> None:
     step_text = (runs_dir / run.id / "steps" / "intake.md").read_text(encoding="utf-8")
     assert secret not in step_text
     assert "REDACTED" in step_text
+
+
+# --------------------------------------------------------------------------- #
+# the security gate fails CLOSED
+# --------------------------------------------------------------------------- #
+
+
+def test_missing_security_line_in_plan_runs_the_security_step(tmp_path: Path, git_repo: Path) -> None:
+    """`plan.security` is scraped out of a file the PLANNER wrote -- model output
+    shaped by untrusted ticket text. Omitting the `Security:` line must not be a
+    cheaper way to disable the security review than lying in it, so an ABSENT
+    marker means "unknown" and runs the step.
+    """
+    profile = _make_profile(git_repo)
+    runs_dir = tmp_path / "runs"
+    executor = FakeExecutor(
+        artifact_writes={"plan": [("plan.md", "# Plan\n\nno marker here\n"),
+                                  ("sections/section-1.md", "# S1\n\nDo it.\n")]},
+        writes={"implement": [("src/impl.py", "print('hello')\n")]},
+    )
+    orch = _make_orchestrator(profile, runs_dir, executor, FakeSink())
+
+    run = orch.run_once(input_text=HAPPY_TEXT)
+
+    assert run.extra["plan_security"] == "yes"
+    assert run.steps["security"].status == StepStatus.OK
+
+
+def test_no_plan_file_at_all_still_runs_the_security_step(tmp_path: Path, git_repo: Path) -> None:
+    """A planner that writes no plan.md is the degenerate case of the same trick."""
+    profile = _make_profile(git_repo)
+    runs_dir = tmp_path / "runs"
+    executor = FakeExecutor(
+        artifact_writes={"plan": [("sections/section-1.md", "# S1\n\nDo it.\n")]},
+        writes={"implement": [("src/impl.py", "print('hello')\n")]},
+    )
+    orch = _make_orchestrator(profile, runs_dir, executor, FakeSink())
+
+    run = orch.run_once(input_text=HAPPY_TEXT)
+
+    assert run.extra["plan_security"] == "yes"
+    assert run.steps["security"].status == StepStatus.OK
+
+
+def test_explicit_security_no_still_skips_the_step(tmp_path: Path, git_repo: Path) -> None:
+    """Fail-closed only changes the ABSENT case: an explicit `Security: no` from a
+    planner that did assess the change is still honoured.
+    """
+    profile = _make_profile(git_repo)
+    runs_dir = tmp_path / "runs"
+    orch = _make_orchestrator(profile, runs_dir, _basic_executor(), FakeSink())
+
+    run = orch.run_once(input_text=HAPPY_TEXT)
+
+    assert run.extra["plan_security"] == "no"
+    assert run.steps["security"].status == StepStatus.SKIPPED

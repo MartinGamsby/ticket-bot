@@ -149,9 +149,15 @@ class GithubRepo(GitLocalRepo):
     # ------------------------------------------------------------------ #
 
     def open_pr(self, title: str, body: str) -> str | None:
+        """`title` comes from untrusted ticket text and `body` from the reporter's
+        model-written `pr.md`; both are `redact()`ed before they leave the machine,
+        since a pull request is world-readable on a public repository.
+        """
         branch = self._branch
         if not branch:
             raise RepoError("open_pr() called before checkout()")
+        title = redact(title)
+        body = redact(body)
         base = self.base_branch or "main"
 
         gh = shutil.which("gh") if self.prefer_gh else None

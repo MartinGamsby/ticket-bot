@@ -357,14 +357,25 @@ configures. It is off (`runtime: {type: none}`) by default.
 
 ## Safety rails
 
-- Per-step **tool allowlists**, enforced by the executor — the clarifier gets no
-  filesystem tools, the reviewer/security roles never get `shell.run`.
+- Per-step **tool allowlists** — the clarifier gets no filesystem tools, the
+  reviewer/security roles never get `shell.run`. Enforced by the `api` executor,
+  which owns the tool catalogue. A `process` executor spawns a whole coding CLI
+  that brings its own tools and cannot be constrained this way, so under a
+  profile that defaults to one (`jira-claude-solari.yaml`, `github-codex.yaml`)
+  containment is whatever that CLI enforces for itself.
 - Every filesystem tool is **path-jailed** (`executors/tools.py`) via
   `Path.resolve()` + `is_relative_to()` against two orchestrator-owned roots and
   nothing else: the workspace (tried first, so a relative path always means "in
   the repo") and the run directory (so a role prompt's `{plan_file}`,
   `{section_file}` and `{run_dir}/pr.md` are writable). `../`, absolute paths
-  outside both, and symlinks pointing outside them are all rejected.
+  outside both, and symlinks pointing outside them are all rejected. Admitting
+  the run directory does not admit the run *record*: `run.json`,
+  `config.resolved.yaml`, `workitem.json`, `banner.txt` and `logs/` are written
+  by the engine and refused to a step, so a run cannot erase its own audit trail.
+- **The security-review gate fails closed.** `plan.security` is scraped out of a
+  file the planner model wrote, so an absent `Security:` line (or an absent
+  `plan.md`) counts as "unknown" and runs the `security` step; only an explicit
+  `Security: no` skips it.
 - Subprocesses are always `subprocess.run(argv, shell=False)` — never a composed
   shell string — with an explicit env allowlist.
 - `when:` is a restricted parser, **never `eval`**; profile/pipeline YAML is
@@ -378,6 +389,10 @@ configures. It is off (`runtime: {type: none}`) by default.
 - **Secrets are `${ENV}` references only** — expanded at use time, registered with
   the redactor immediately, and scrubbed (pattern-based, plus every literal secret
   value seen) from `config.resolved.yaml`, every run artifact, and every log line.
+  Also from everything that leaves the machine: the Jira comment and remote link,
+  the GitHub PR comment, the PR title and body, and the git commit message. A
+  ticket is readable by whoever filed it, so the remote copy must not be the
+  leakier one.
 - **No auto-merge, anywhere.** `gates.on_pr_ready: human_review` opens the PR and
   stops the run for a human; `auto` still never means "merge", only "don't pause".
 - **A clean agent summary is not proof the edit landed in the right tree**, so

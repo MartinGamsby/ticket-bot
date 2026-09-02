@@ -78,5 +78,14 @@ exactly that shape — keep the two in sync. `diff.touches_security` is a keywor
 `patch.diff` (`auth`, `login`, `token`, `secret`, `password`, `crypto`, `subprocess`, `shell`,
 `eval`, `pickle`, `sql`).
 
+**`plan.security` fails CLOSED: absent means `"yes"`.** It gates the `security` step
+(`when: "plan.security == yes or diff.touches_security"`) off a value scraped from a file the PLANNER
+model wrote, under a prompt built from untrusted ticket text. Defaulting to `"no"` made *omitting*
+the `Security:` line — or writing no `plan.md` at all — a cheaper and far less conspicuous way to
+disable the security review than writing an explicit lie in it. Both `_after_planner` and
+`build_context`'s pre-planner default are now `"yes"`; only an explicit `Security: no` from a planner
+that did assess the change turns the step off. The cost of the absent case is one extra model call,
+which the budget cap bounds.
+
 Validation timing: every `when:` is parsed once at pipeline LOAD time against an empty context, so a
 typo fails before the run starts. Re-evaluation failure mid-run is logged and treated as True.

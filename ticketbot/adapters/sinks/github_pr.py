@@ -92,6 +92,10 @@ class GithubPrSink:
         return None
 
     def comment(self, item: WorkItem, markdown: str, attachments: Sequence[Attachment] = ()) -> None:
+        """The body is `redact()`ed on the way out: it is model-written text and a
+        PR comment is world-readable on a public repository. `FileSink` already
+        scrubs the same text locally -- the remote copy must not be the leakier one.
+        """
         pr_url = self._current_pr_url()
         if not pr_url:
             logger.info("github_pr: no PR URL yet; dropping comment for %s (no-op)", item.key)
@@ -104,6 +108,7 @@ class GithubPrSink:
             # in the comment text instead of attaching it.
             refs = "\n".join(f"- `{att.path}`" if att.path else f"- {att.filename}" for att in attachments)
             body = f"{markdown}\n\nAttachments (see run directory):\n{refs}"
+        body = redact(body)
 
         gh = shutil.which("gh") if self.prefer_gh else None
         if gh:

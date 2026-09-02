@@ -33,10 +33,12 @@ The append behaviour is why the engine writes the canonical `ticket_comment.md` 
 
 Shares `JiraConnection` with `JiraSource`. Attachments are uploaded FIRST (so the comment can
 reference them, with the `X-Atlassian-Token: no-check` header); an upload failure is logged and
-appended to the comment as a note rather than aborting it. The comment body is converted from
-markdown to ADF. `transition()` looks the target up by `to.name` case-insensitively and raises
-`SinkError` listing the available targets when there is no match. `unassign()` PUTs a null
-`accountId`. `link()` posts a remote link.
+appended to the comment as a note rather than aborting it. The comment body is `redact()`ed and then
+converted from markdown to ADF — **in that order**, see
+[../config/secrets-and-redaction.md](../config/secrets-and-redaction.md). `transition()` looks the
+target up by `to.name` case-insensitively and raises `SinkError` listing the available targets when
+there is no match. `unassign()` PUTs a null `accountId`. `link()` posts a remote link, url and title
+redacted.
 
 ## `GithubPrSink` — `adapters/sinks/github_pr.py`
 

@@ -234,3 +234,25 @@ def test_module_source_contains_no_merge_call():
 
     source = Path(module.__file__).read_text(encoding="utf-8")
     assert "merge" not in source.lower()
+
+
+# ---- outbound redaction ----------------------------------------------------------
+
+
+def test_comment_body_is_redacted_before_it_reaches_github(monkeypatch):
+    """A PR comment is world-readable on a public repo; the body is model-written
+    text, so a credential quoted into it must be masked on the way out."""
+    from ticketbot.config import redact as redact_module
+
+    monkeypatch.setattr(redact_module, "_default", redact_module.Redactor())
+    redact_module.register_secret("supersecretvalue123")
+
+    client, captured = _client_and_capture()
+    sink = GithubPrSink(_cfg(), client=client)
+    sink.set_pr_url(PR_URL)
+    sink.comment(_item(), "token supersecretvalue123 and ghp_aaaaaaaaaaaaaaaaaaaaaaaa")
+
+    body = captured["json"]["body"]
+    assert "supersecretvalue123" not in body
+    assert "ghp_" not in body
+    assert redact_module.REDACTED in body
