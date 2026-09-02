@@ -34,12 +34,37 @@ Options: `path` (default `"."`, resolved against `base_dir`), `base_branch`, `br
   never inline, with a co-author trailer appended when `coauthor_trailer` is on.
 - `cleanup()` removes and prunes the worktree unless `keep_worktree` or `isolation: inplace`;
   failures are logged, never raised over a real error.
-- `verify_landed(paths)` returns the subset that does NOT exist under the workspace, naming anything
-  that resolves outside it. A spawned coding CLI does not inherit our working directory and may
-  write to the parent clone instead of the worktree — a clean agent summary is not proof the edit
-  landed in the right tree. `parent_clone_hint()` produces the "check git status in the parent
-  clone" message the engine appends to that failure. What this check can actually catch today is a
-  recorded open question: [../known-gaps.md](../known-gaps.md).
+### The landing check — two methods, because neither can answer the other
+
+A clean agent summary is not proof the edit landed in the right tree. Every `commit:` step runs both
+of these (`engine/orchestrator._landing_error`) before it commits; either one non-empty fails the
+step, with `parent_clone_hint()`'s "check `git status` in the parent clone" appended.
+
+- `verify_landed(paths)` — the subset of the DECLARED paths that do not exist under the workspace,
+  naming anything that resolves outside it. Today every caller feeds it `ExecResult.files_written`,
+  which both executors derive from a snapshot of the workspace, so those paths are inside by
+  construction and it returns `[]` every time. It is a guard on a future executor that trusts an
+  agent's own "files I edited" list — it can never see a write that went somewhere else, because
+  such a write never enters `files_written` at all.
+- `drifted()` — porcelain lines dirty in the PARENT clone now but not when `checkout()` finished.
+  This is the one that catches a spawned CLI ignoring its cwd. It is a set difference against a
+  baseline taken after `worktree add`, so it cannot false-positive: a pre-existing dirty parent
+  clone, `worktree add`'s own effects, and a step that legitimately writes nothing (a reviewer with
+  no findings, a `when:`-skipped step) all report `[]`. The runs dir is excluded by pathspec when it
+  sits inside the clone (`runs/` at the project root is normal), so the engine's own artifacts are
+  never read as drift. Returns `[]` — "not observable" — before `checkout()` and under
+  `isolation: inplace`, where the workspace IS the parent clone.
+
+```python
+# git_local.py
+def drifted(self) -> list[str]:
+    if self._parent_baseline is None:      # inplace, or before checkout
+        return []
+    return sorted(self._parent_porcelain() - self._parent_baseline)
+```
+
+`_parent_porcelain()` never raises (unlike `status()`): a drift probe that could throw would turn a
+diagnostic into a new way to fail a run.
 
 ## `GithubRepo` — `adapters/repos/github.py`
 

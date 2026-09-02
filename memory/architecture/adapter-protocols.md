@@ -50,7 +50,8 @@ class Repo(Protocol):
     def push(self) -> None: ...                    # no-op for git_local
     def open_pr(self, title: str, body: str) -> str | None: ...  # None for git_local
     def cleanup(self) -> None: ...
-    def verify_landed(self, paths: Sequence[Path | str]) -> list[str]: ...
+    def verify_landed(self, paths: Sequence[Path | str]) -> list[str]: ...  # declared writes missing
+    def drifted(self) -> list[str]: ...             # changes OUTSIDE the workspace since checkout
 ```
 
 Optional: `branch_name(item)`, `parent_clone_hint()`. `CommitResult.sha is None` means nothing was

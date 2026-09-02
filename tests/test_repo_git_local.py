@@ -337,6 +337,99 @@ def test_parent_clone_hint_names_both_paths(git_repo):
     assert str(ws) in hint
 
 
+# ---- drifted -- the half verify_landed structurally cannot see -------------------
+#
+# `verify_landed()` is fed `ExecResult.files_written`, which both executors derive
+# from a snapshot of the WORKSPACE. A spawned CLI that ignores its cwd and edits the
+# parent clone instead leaves nothing in that list, so `verify_landed()` returns []
+# and the step commits an empty change. `drifted()` looks at the tree that actually
+# received the write.
+
+
+def test_drifted_is_empty_when_the_agent_wrote_into_the_workspace(git_repo):
+    repo = _repo(git_repo)
+    ws = repo.checkout("agent/eng-20-drift")
+    (ws / "feature.py").write_text("print('hi')\n", encoding="utf-8")
+
+    assert repo.drifted() == []
+
+
+def test_drifted_names_a_write_that_landed_in_the_parent_clone(git_repo):
+    repo = _repo(git_repo)
+    repo.checkout("agent/eng-21-drift")
+
+    # the failure mode: the agent's cwd was not the worktree
+    (git_repo / "feature.py").write_text("print('hi')\n", encoding="utf-8")
+
+    drifted = repo.drifted()
+    assert len(drifted) == 1
+    assert "feature.py" in drifted[0]
+
+
+def test_drifted_ignores_edits_to_a_tracked_file_in_the_parent_clone_that_predate_checkout(
+    git_repo,
+):
+    """A developer's own work in progress is not the agent's drift."""
+    (git_repo / "README.md").write_text("hello, edited by a human\n", encoding="utf-8")
+
+    repo = _repo(git_repo)
+    repo.checkout("agent/eng-22-drift")
+
+    assert repo.drifted() == []
+
+    # ...but a NEW change on top of that baseline still shows
+    (git_repo / "agent-wrote-this.py").write_text("x\n", encoding="utf-8")
+    assert any("agent-wrote-this.py" in line for line in repo.drifted())
+
+
+def test_drifted_is_empty_for_a_step_that_changes_nothing(git_repo):
+    """A reviewer that finds no problems must not be failed by the drift check."""
+    repo = _repo(git_repo)
+    repo.checkout("agent/eng-23-drift")
+
+    assert repo.drifted() == []
+    assert repo.drifted() == []  # and it stays that way -- no accumulating state
+
+
+def test_drifted_ignores_the_run_directory_inside_the_worked_on_repo(git_repo):
+    """`runs/` at the project root is a natural place for `runs_dir`, and then the
+    engine writes its own artifacts into the tree it is also working on. Those are
+    ticketbot's files, not an agent's stray edit.
+    """
+    run_dir = git_repo / "runs" / "2026-01-01-0000-eng-24"
+    repo = GitLocalRepo(_cfg(), base_dir=git_repo, run_dir=run_dir)
+    repo.checkout("agent/eng-24-drift")
+
+    run_dir.mkdir(parents=True)
+    (run_dir / "plan.md").write_text("# plan\n", encoding="utf-8")
+    (git_repo / "runs" / "another-run.json").write_text("{}\n", encoding="utf-8")
+
+    assert repo.drifted() == []
+
+    # a write elsewhere in the parent clone is still drift
+    (git_repo / "feature.py").write_text("x\n", encoding="utf-8")
+    assert any("feature.py" in line for line in repo.drifted())
+
+
+def test_drifted_is_empty_before_checkout(git_repo):
+    repo = _repo(git_repo)
+    assert repo.drifted() == []
+
+
+def test_drifted_is_empty_under_inplace_isolation(git_repo):
+    """`isolation: inplace` makes the workspace BE the parent clone, so there is no
+    other tree a stray write could land in -- and every legitimate edit would
+    otherwise read as drift.
+    """
+    run_git(["checkout", "-b", "wip"], cwd=git_repo)
+    repo = _repo(git_repo, isolation="inplace")
+    ws = repo.checkout("wip")
+    assert ws == git_repo.resolve()
+
+    (git_repo / "feature.py").write_text("x\n", encoding="utf-8")
+    assert repo.drifted() == []
+
+
 # ---- cleanup ---------------------------------------------------------------------
 
 

@@ -189,6 +189,35 @@ def test_file_text_none_is_the_fully_offline_default() -> None:
     assert profile.runtime.type == "none"
 
 
+@pytest.mark.parametrize(
+    ("profile_name", "kind", "key_name", "store_name"),
+    [
+        ("jira-claude-solari", "claude-cli", "ANTHROPIC_API_KEY", "CLAUDE_CONFIG_DIR"),
+        ("github-codex", "codex-cli", "OPENAI_API_KEY", "CODEX_HOME"),
+    ],
+)
+def test_shipped_cli_executors_can_authenticate_out_of_the_box(
+    profile_name: str, kind: str, key_name: str, store_name: str
+) -> None:
+    """The credential contract, pinned where a user meets it. The spawned CLI signs
+    in from its own store (reachable through `DEFAULT_PASSTHROUGH` alone), and the
+    two names below are forwarded ONLY when set -- for headless/CI, and for a
+    relocated store.
+
+    The declaration must be `env_passthrough:`, never `env:`. An `env:` value is a
+    `${ENV}` ref expanded strictly at adapter-construction time, so
+    `env: {ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"}` would fail the run on every
+    machine that authenticates by OAuth instead of by key -- which is the normal
+    case for `claude -p`.
+    """
+    profile = load_profile(PROFILES_DIR / f"{profile_name}.yaml")
+    executor = profile.executor.kinds[kind]
+
+    assert executor.type == "process"
+    assert set(executor.opt("env_passthrough") or []) == {key_name, store_name}
+    assert not (executor.opt("env") or {}), "credentials go in env_passthrough, not env"
+
+
 def test_base_yaml_itself_is_a_complete_valid_profile() -> None:
     # _base.yaml has no `extends:` of its own -- it must validate standalone, not
     # just as a fragment merged into a child.

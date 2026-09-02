@@ -45,9 +45,16 @@ when a sweep produced nothing.
 - `--pause-at <step-id>` turns exactly that step's `optional_human` gate interactive, without
   pausing every such gate in the pipeline.
 - `--force-lock` breaks an existing (possibly stale) run lock deliberately.
-- `--runs-dir` overrides the profile's `runs_dir`. Without it, `run`/`poll` use
-  `profile.base_dir / profile.runs_dir`, but `resume` hardcodes `runs/` — a known gap, see
-  [../known-gaps.md](../known-gaps.md).
+- `--runs-dir` overrides the profile's `runs_dir`. Without it the rule is
+  `profile.base_dir / profile.runs_dir`, resolved by `engine.orchestrator.resolve_runs_dir()` —
+  the single copy of that rule, shared by `Orchestrator.__init__` and `cli._cmd_resume`.
+
+  `resume` is the awkward one: the run must be loaded to learn its profile name, but the PROFILE
+  owns the directory the run lives in. So it resolves in three branches — `--runs-dir` wins
+  outright; failing that an explicit `-c` is loaded FIRST and `resolve_runs_dir(profile)` used
+  (that profile is then reused, not re-loaded, after the store opens); with neither, `runs/` under
+  the cwd is the only thing knowable from a run id alone. Duplicating the rule instead of sharing
+  it is exactly how `resume` came to ignore a custom `runs_dir`.
 
 `Orchestrator(interactive=True)` exists but has no CLI flag; only `--pause-at` reaches that behaviour.
 

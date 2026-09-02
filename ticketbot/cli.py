@@ -19,7 +19,7 @@ from .config.redact import redact
 from .core.banner import facts_from_profile, render_banner
 from .core.run import Run, RunStatus, RunStore
 from .engine.locks import LockHeld
-from .engine.orchestrator import Orchestrator
+from .engine.orchestrator import Orchestrator, resolve_runs_dir
 
 # Exit codes, shared by `run`, `poll` and `resume`.
 _EXIT_OK = 0
@@ -216,7 +216,23 @@ def _cmd_poll(args: argparse.Namespace) -> int:
 
 
 def _cmd_resume(args: argparse.Namespace) -> int:
-    runs_dir = Path(args.runs_dir) if args.runs_dir else Path("runs")
+    # Two-pass, because the two facts depend on each other: the run has to be
+    # loaded to learn which profile it belongs to, but the PROFILE owns the
+    # runs dir the run lives in. `--runs-dir` settles it outright; failing that,
+    # an explicit `-c` lets the profile's own `runs_dir` be resolved before the
+    # store is opened (`resolve_runs_dir`, shared with `Orchestrator`); with
+    # neither, `runs/` is the only thing that can be known here.
+    profile: object | None = None
+    if args.runs_dir:
+        runs_dir = Path(args.runs_dir)
+    elif args.config:
+        profile, err = _load_profile_or_none(args.config)
+        if err is not None:
+            return err
+        runs_dir = resolve_runs_dir(profile)  # type: ignore[arg-type]
+    else:
+        runs_dir = Path("runs")
+
     store = RunStore(runs_dir)
     try:
         run = store.load(args.run_id)
@@ -224,10 +240,11 @@ def _cmd_resume(args: argparse.Namespace) -> int:
         print(f"error: no such run {args.run_id!r} under {runs_dir}: {redact(str(e))}", file=sys.stderr)
         return _EXIT_CONFIG_ERROR
 
-    config_path = args.config if args.config else str(Path("profiles") / f"{run.profile_name}.yaml")
-    profile, err = _load_profile_or_none(config_path)
-    if err is not None:
-        return err
+    if profile is None:
+        config_path = args.config if args.config else str(Path("profiles") / f"{run.profile_name}.yaml")
+        profile, err = _load_profile_or_none(config_path)
+        if err is not None:
+            return err
 
     orchestrator = Orchestrator(profile, runs_dir=runs_dir)
     try:
@@ -295,7 +312,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_resume = sub.add_parser("resume", help="resume an interrupted or blocked run")
     p_resume.add_argument("run_id", help="the run id under runs-dir to resume")
     p_resume.add_argument("-c", "--config", default=None, help="path to the profile YAML (default: profiles/<run's profile_name>.yaml)")
-    p_resume.add_argument("--runs-dir", default=None, help="directory containing runs/<run_id> (default: runs)")
+    p_resume.add_argument("--runs-dir", default=None, help="directory containing runs/<run_id> (default: the -c profile's runs_dir, else runs)")
     p_resume.add_argument("--force-lock", action="store_true", help="break an existing (possibly stale) lock")
     p_resume.set_defaults(func=_cmd_resume)
 

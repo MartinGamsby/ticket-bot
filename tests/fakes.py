@@ -141,11 +141,13 @@ class FakeRepo:
         commit_shas: list[str | None] | None = None,
         pr_url: str | None = "https://github.com/acme/app/pull/1",
         missing: list[str] | None = None,
+        drift: list[str] | None = None,
     ) -> None:
         self._workspace = workspace or Path("/fake/workspace")
         self._commit_shas = list(commit_shas) if commit_shas is not None else ["deadbeef"]
         self.pr_url = pr_url
         self.missing = list(missing) if missing is not None else []
+        self.drift = list(drift) if drift is not None else []
         self.calls: list[tuple[str, tuple, dict]] = []
         self.pushed = False
         self.cleaned_up = False
@@ -193,6 +195,10 @@ class FakeRepo:
     def verify_landed(self, paths: Sequence[Path | str]) -> list[str]:
         self._record("verify_landed", paths)
         return list(self.missing)
+
+    def drifted(self) -> list[str]:
+        self._record("drifted")
+        return list(self.drift)
 
 
 class FakeSink:

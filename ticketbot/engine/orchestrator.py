@@ -20,6 +20,7 @@ import json
 import logging
 import re
 import time
+from collections.abc import Sequence
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -131,6 +132,62 @@ def _apply_pr_url(text: str, pr_url: str) -> str:
         return text
     separator = "" if text.endswith("\n") else "\n"
     return f"{text}{separator}\nPR: {pr_url}\n"
+
+
+def resolve_runs_dir(profile: Profile, override: Path | str | None = None) -> Path:
+    """Where this profile's `runs/<id>/` directories live.
+
+    `--runs-dir` wins outright; otherwise the profile's own `runs_dir`, resolved
+    against its `base_dir` (the directory the YAML was loaded from) exactly as
+    `repo.path` is. Public because `cli._cmd_resume` has to resolve the same
+    directory BEFORE it can build an `Orchestrator` -- it needs the store open to
+    learn which profile the run belongs to. Two copies of this rule is how
+    `resume` came to ignore a custom `runs_dir` in the first place.
+    """
+    if override is not None:
+        base = Path(override)
+    elif profile.base_dir is not None:
+        base = Path(profile.base_dir) / profile.runs_dir
+    else:
+        base = Path(profile.runs_dir)
+    return base.resolve()
+
+
+def _landing_error(repo: Any, files_written: Sequence[str]) -> str | None:
+    """The pre-commit landing check, or `None` when the step's edits are where they
+    should be. Two questions, because neither can answer the other:
+
+      `repo.verify_landed(files_written)` -- are the paths this step DECLARED
+        really inside the workspace? Blind to a write that went elsewhere: such a
+        write never reaches `files_written`, which both executors derive from a
+        snapshot of the workspace itself.
+      `repo.drifted()` -- did anything appear in the parent clone since checkout?
+        This is what actually catches a spawned CLI that ignored its cwd, edited
+        the developer's clone and returned a clean summary. It compares against a
+        baseline, so a step that legitimately writes nothing (a reviewer with no
+        findings) reports nothing.
+
+    Both are `getattr`-probed: a third-party `Repo` that predates either one
+    degrades to "no objection" rather than to an AttributeError mid-run.
+    """
+    problems: list[str] = []
+
+    verify = getattr(repo, "verify_landed", None)
+    missing = list(verify(files_written)) if verify is not None else []
+    if missing:
+        problems.append(f"declared files were not found under the workspace: {missing}.")
+
+    drift = getattr(repo, "drifted", None)
+    drifted = list(drift()) if drift is not None else []
+    if drifted:
+        problems.append(f"changes landed OUTSIDE the workspace during this step: {drifted}.")
+
+    if not problems:
+        return None
+
+    hint_fn = getattr(repo, "parent_clone_hint", None)
+    hint = hint_fn() if hint_fn is not None else ""
+    return " ".join([*problems, hint]).strip()
 
 
 def _iso_now() -> str:
@@ -257,6 +314,10 @@ class _DryRunRepo:
     def verify_landed(self, paths: Any) -> list[str]:
         return self.inner.verify_landed(paths)
 
+    def drifted(self) -> list[str]:
+        fn = getattr(self.inner, "drifted", None)
+        return list(fn()) if fn is not None else []
+
     def parent_clone_hint(self) -> str:
         fn = getattr(self.inner, "parent_clone_hint", None)
         return fn() if fn is not None else ""
@@ -284,13 +345,7 @@ class Orchestrator:
         pause_at: str | None = None,
     ) -> None:
         self.profile = profile
-        if runs_dir is not None:
-            base = Path(runs_dir)
-        elif profile.base_dir is not None:
-            base = Path(profile.base_dir) / profile.runs_dir
-        else:
-            base = Path(profile.runs_dir)
-        self.runs_dir = base.resolve()
+        self.runs_dir = resolve_runs_dir(profile, runs_dir)
         self.store = RunStore(self.runs_dir)
         self.dry_run = dry_run
         self.interactive = interactive
@@ -870,15 +925,10 @@ class Orchestrator:
 
             # 10. verify landed + commit
             if step.commit:
-                missing = repo.verify_landed(result.files_written)
-                if missing:
-                    hint_fn = getattr(repo, "parent_clone_hint", None)
-                    hint = hint_fn() if hint_fn is not None else ""
+                landing_error = _landing_error(repo, result.files_written)
+                if landing_error is not None:
                     sr.status = StepStatus.FAILED
-                    sr.error = (
-                        f"declared files were not found under the workspace: {missing}. "
-                        f"{hint}"
-                    ).strip()
+                    sr.error = landing_error
                     sr.ended_at = _iso_now()
                     run.status = RunStatus.FAILED
                     self._save_step(run, sr, texts)
@@ -1045,10 +1095,14 @@ class Orchestrator:
         result = executor.run(req)
 
         if step.commit:
-            missing = repo.verify_landed(result.files_written)
-            if not missing:
+            landing_error = _landing_error(repo, result.files_written)
+            if landing_error is None:
                 commit_message = f"fix: {defer_line[:60]}"
                 repo.commit(commit_message, body=strip_protocol(result.text))
+            else:
+                # The spawned fixer is advisory: a bad landing means "do not
+                # commit this", never "fail the run that already succeeded".
+                logger.warning("run %s: fixer output not committed: %s", run.id, landing_error)
 
         self.store.write_artifact(run, f"steps/{fixer_step.id}.md", result.text)
 

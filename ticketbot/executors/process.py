@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -35,13 +36,39 @@ from .base import (
 
 logger = logging.getLogger(__name__)
 
-# Kept minimal but enough for a normal CLI/interpreter to start and find DLLs/certs
-# on both platforms. Never `os.environ` wholesale -- that would hand every API key
-# in the parent process to an arbitrary subprocess.
+# The credential contract for a spawned coding CLI: **the CLI authenticates
+# itself**. `claude -p` and `codex exec` both read their own credential store
+# (an OAuth profile under the user's home, or the OS keyring) rather than an API
+# key handed to them, so this list carries the non-secret LOCATORS that store
+# needs to be findable -- and nothing that is itself a credential.
+#
+#   Windows  USERPROFILE, APPDATA, LOCALAPPDATA  (`%USERPROFILE%\.claude`,
+#            `%APPDATA%`-rooted config, DPAPI-backed credential files)
+#   POSIX    HOME, XDG_CONFIG_HOME, XDG_DATA_HOME, XDG_CACHE_HOME
+#   Linux    XDG_RUNTIME_DIR + DBUS_SESSION_BUS_ADDRESS -- without BOTH, a
+#            Secret Service keyring cannot even be reached, and a CLI that
+#            stores its token there starts unauthenticated
+#   both     PATH/PATHEXT/COMSPEC/SYSTEMROOT/WINDIR/PROGRAMDATA to start at all,
+#            TEMP/TMP/TMPDIR to write scratch files, LANG/LC_ALL for encoding
+#
+# An API KEY is never added here. A profile that wants one forwarded says so in
+# its own `env_passthrough:` (see `profiles/jira-claude-solari.yaml`) -- that
+# keeps "this credential goes into this subprocess" a visible, per-profile
+# decision instead of a silent default. Never `os.environ` wholesale: that would
+# hand EVERY key in the parent process to an arbitrary CLI.
 DEFAULT_PASSTHROUGH: list[str] = [
-    "PATH", "SYSTEMROOT", "WINDIR", "COMSPEC", "TEMP", "TMP", "USERPROFILE",
+    "PATH", "SYSTEMROOT", "WINDIR", "COMSPEC", "TEMP", "TMP", "TMPDIR", "USERPROFILE",
     "HOME", "LANG", "LC_ALL", "PATHEXT", "PROGRAMDATA", "APPDATA", "LOCALAPPDATA",
+    "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR",
+    "DBUS_SESSION_BUS_ADDRESS",
 ]
+
+# A forwarded variable whose NAME reads like a credential is registered with the
+# redactor, so the child's own stdout/stderr (appended to `runs/<id>/logs/`) can
+# never echo it back in the clear. Matched on the name, not the value: a path
+# forwarded as `CLAUDE_CONFIG_DIR` must NOT become a redaction pattern applied to
+# every log line in the process.
+_SECRET_NAME_RE = re.compile(r"(?i)(?:^|_)(KEY|TOKEN|SECRET|PASSWORD|CREDENTIALS?)(?:_|$)")
 
 _PROMPT_MODES = {"stdin", "arg", "file"}
 _TREE_KILL_GRACE_S = 5
@@ -170,8 +197,24 @@ class ProcessExecutor:
         )
 
     def _build_env(self, req: ExecRequest) -> dict[str, str]:
-        names = [*DEFAULT_PASSTHROUGH, *self.env_passthrough]
-        env: dict[str, str] = {name: os.environ[name] for name in names if name in os.environ}
+        """The child's WHOLE environment: `DEFAULT_PASSTHROUGH` (non-secret
+        locators, so a CLI can find its own credential store) + the profile's
+        `env_passthrough:` names that are actually set + its expanded `env:`
+        values. A name the profile forwards deliberately and that reads like a
+        credential is `register_secret()`'d, exactly as an `env:` value is, so it
+        is scrubbed from this step's log even though its value never appeared in
+        the profile.
+        """
+        env: dict[str, str] = {
+            name: os.environ[name] for name in DEFAULT_PASSTHROUGH if name in os.environ
+        }
+        for name in self.env_passthrough:
+            value = os.environ.get(name)
+            if value is None:
+                continue  # forwarded opportunistically; an unset name is not an error
+            if _SECRET_NAME_RE.search(name):
+                register_secret(value)
+            env[name] = value
         for key, raw_value in self.env_cfg.items():
             expanded = expand_env(raw_value)
             register_secret(expanded)

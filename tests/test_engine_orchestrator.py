@@ -20,7 +20,7 @@ import pytest
 from ticketbot.config.schema import Profile
 from ticketbot.core.run import RunStatus, RunStore, StepStatus
 from ticketbot.core.workitem import slugify
-from ticketbot.engine.locks import LockHeld, RunLock
+from ticketbot.engine.locks import LockHeld, RunLock, lock_filename
 from ticketbot.engine.orchestrator import Orchestrator
 from ticketbot.executors.base import ExecResult
 from ticketbot.models.base import Usage
@@ -145,7 +145,7 @@ def test_happy_run_produces_artifacts_and_ends_done(tmp_path: Path, git_repo: Pa
     assert not (run_dir / "screenshots").exists()
 
     # the lock is released on the success path
-    lock_path = runs_dir / ".locks" / f"{slugify(run.work_item_key)}.lock"
+    lock_path = runs_dir / ".locks" / lock_filename(run.work_item_key)
     assert not lock_path.exists()
 
     # a declared artifact the step did not create is logged as a warning
@@ -253,6 +253,63 @@ def test_implement_files_written_outside_workspace_fails_step_and_does_not_commi
     executed_ids = {r.step_id for r in executor.requests}
     assert "verify" not in executed_ids
     assert "publish" not in executed_ids
+
+
+def test_a_write_that_landed_in_the_parent_clone_fails_the_step(
+    tmp_path: Path, git_repo: Path
+) -> None:
+    """The failure `verify_landed()` structurally cannot see: a spawned CLI that
+    ignored its cwd, edited the PARENT clone and returned a clean summary. Nothing
+    it wrote shows up in `files_written` (both executors derive that from a snapshot
+    of the WORKSPACE), so the declared-paths audit has nothing to object to and the
+    step used to commit an empty change and sail on to `publish`.
+    """
+    profile = _make_profile(git_repo)
+    runs_dir = tmp_path / "runs"
+    fake_sink = FakeSink()
+
+    class _WrongTreeExecutor(FakeExecutor):
+        def run(self, req):  # noqa: ANN001, ANN201
+            if req.step_id == "implement":
+                (git_repo / "impl.py").write_text("print('hello')\n", encoding="utf-8")
+            return super().run(req)  # -> files_written == [], text "ok"
+
+    executor = _WrongTreeExecutor(artifact_writes=_plan_artifact_writes(1))
+    orch = _make_orchestrator(profile, runs_dir, executor, fake_sink)
+
+    run = orch.run_once(input_text=HAPPY_TEXT)
+
+    assert run.status == RunStatus.FAILED
+    step = run.steps["implement"]
+    assert step.status == StepStatus.FAILED
+    assert "OUTSIDE the workspace" in step.error
+    assert "impl.py" in step.error
+    assert str(git_repo.resolve()) in step.error  # the parent-clone hint
+    assert step.commits == []
+
+    executed_ids = {r.step_id for r in executor.requests}
+    assert "verify" not in executed_ids
+    assert "publish" not in executed_ids
+
+
+def test_a_commit_step_that_writes_nothing_is_not_reported_as_drift(
+    tmp_path: Path, git_repo: Path
+) -> None:
+    """The drift check must not turn "this step had nothing to do" into a failure.
+    `implement` is the only `commit:` step in `tiny.yaml`; give it a plan section
+    and an executor that writes nothing at all anywhere.
+    """
+    profile = _make_profile(git_repo)
+    runs_dir = tmp_path / "runs"
+    fake_sink = FakeSink()
+    executor = FakeExecutor(artifact_writes=_plan_artifact_writes(1))  # no `writes=`
+
+    orch = _make_orchestrator(profile, runs_dir, executor, fake_sink)
+    run = orch.run_once(input_text=HAPPY_TEXT)
+
+    assert run.status == RunStatus.DONE
+    assert run.steps["implement"].status == StepStatus.OK
+    assert run.steps["implement"].error is None
 
 
 # --------------------------------------------------------------------------- #

@@ -29,7 +29,7 @@ memory/
 | [summary.md](summary.md) | what the system is, in one paragraph, plus an orientation table |
 | [terminology.md](terminology.md) | every domain term, including the two "non-terms" that mislead |
 | [practices.md](practices.md) | the 12 invariants, the conventions, and a table of real traps |
-| [known-gaps.md](known-gaps.md) | unwired comment templates, four open engineering items, smaller limits |
+| [known-gaps.md](known-gaps.md) | unwired comment templates, two open engineering items, smaller limits |
 
 ## architecture/
 

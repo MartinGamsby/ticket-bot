@@ -28,33 +28,18 @@ Decide deliberately. Do not assume the templates are live.
 
 ## Open engineering items
 
-- **`verify_landed()` is vacuous as a drift detector.** `ProcessExecutor.files_written` comes only
-  from `diff_snapshots(req.workspace)`, and so does `ApiLoopExecutor`'s after its workspace-only
-  filter — so every path handed to `repo.verify_landed()` is under the workspace by construction and
-  the check can never return a miss. Catching real worktree drift (a spawned CLI writing into the
-  parent clone) needs a different signal: e.g. an `implement` step whose `commit:` staged nothing AND
-  whose workspace snapshot is unchanged, cross-checked against `repo.status()` and the parent clone.
-  Whatever replaces it must not fail steps that legitimately change nothing, such as a `review` with
-  no findings. See [adapters/repos.md](adapters/repos.md).
-- **Credentials for the `process` executor are undecided.** `_build_env` passes `DEFAULT_PASSTHROUGH`
-  plus the profile's own `env:`, and neither `jira-claude-solari.yaml` (`claude-cli`) nor
-  `github-codex.yaml` (`codex-cli`) declares an `env:` or `env_passthrough:` — so the spawned CLI
-  starts with no `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` and must fall back to whatever credential file
-  lives under the passed-through `USERPROFILE`/`HOME`. Decide whether the shipped profiles should
-  declare `env: {ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"}` explicitly or whether CLI-managed
-  credentials are the intended contract, then say so in the README's env table.
-- **`resume` ignores the profile's `runs_dir`.** `cli.py: _cmd_resume` hardcodes `Path("runs")` when
-  `--runs-dir` is absent, while `run`/`poll` honour `profile.base_dir / profile.runs_dir`. A profile
-  with a custom `runs_dir` cannot be resumed without the flag. The fix needs a two-pass load (the run
-  must be loaded before the profile name is known, the profile before its runs dir); the clean shape
-  is "if `-c` is given, load the profile first and take its runs dir, else fall back to `runs/`",
-  plus a CLI test per branch.
-- **Run-lock keys can collide.** `RunLock._path()` keys the lock file on `slugify(item.key)`, which
-  lowercases, collapses every non-alphanumeric run to a hyphen and truncates at 40 chars — two
-  distinct work items with long, similar keys (or keys differing only in case or punctuation) share
-  one lock, and `poll()` silently skips one of them. A short hash suffix of the raw key would fix it,
-  but it changes the lock-file naming that `--force-lock` users and existing `runs/.locks/` content
-  depend on.
+- **The parent-clone drift check is baseline-relative, not authoritative.** `GitLocalRepo.drifted()`
+  compares the parent clone's `git status` against a snapshot taken at `checkout()`, so it reports
+  only what appeared DURING the run. That is what makes it false-positive-free, but it also means a
+  human editing the parent clone while a run is in flight will fail the next `commit:` step. That is
+  out of contract (the engine assumes it owns the clone for the duration) and the error names the
+  paths, so it is diagnosable — but it is the one way this check can be wrong.
+  See [adapters/repos.md](adapters/repos.md).
+- **`env_passthrough:` on the `local_shell` runtime does not register secrets.**
+  `ProcessExecutor._build_env` `register_secret()`s a forwarded name that reads like a credential;
+  `LocalShellRuntime._build_env` does not. It runs the project's own `shell.run` commands rather than
+  a credential-consuming CLI, so nothing ships that forwards a secret to it — but the two `_build_env`
+  implementations are now deliberately different, and that is worth knowing before copying either.
 
 ## Smaller known limitations
 
@@ -64,5 +49,7 @@ Decide deliberately. Do not assume the templates are live.
   never be true. Populating it means passing facts through `extra=`.
 - `Orchestrator(interactive=...)` has no CLI flag; only `--pause-at` reaches it.
 - `for_each` supports only `plan.sections`.
-- `engine/orchestrator.py` is 1144 lines, well past the project's own 350-line guidance, and is the
-  obvious candidate for decomposition (adapter wiring / the step loop / the per-role hooks).
+- Two files are past the project's own 350-line guidance: `engine/orchestrator.py` (~1200 lines —
+  the obvious candidate for decomposition into adapter wiring / the step loop / the per-role hooks)
+  and `adapters/repos/git_local.py` (~400; branch naming + worktree lifecycle + the landing checks
+  are the natural seams).

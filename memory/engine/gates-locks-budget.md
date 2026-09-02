@@ -27,7 +27,8 @@ An awaited gate writes `question.md`, sets the run BLOCKED and the step BLOCKED,
 
 ## Locks — `engine/locks.py`
 
-One work item, one run. `runs/.locks/<slugify(item.key)>.lock`, created with
+One work item, one run. `runs/.locks/<slug>-<16 hex of sha256(raw key)>.lock` (`lock_filename()`),
+created with
 `os.open(O_CREAT | O_EXCL | O_WRONLY)` — atomic on Windows and POSIX. The enforcement IS the atomic
 creation; the JSON content (`pid`, `host`, `run_id`, `started_at`, `key`) is advisory, for diagnosing
 who holds it and for recognising staleness.
@@ -42,8 +43,13 @@ lock.release()                         # only if we own it (matching run_id); ne
 looks stale (older than 6h, or its pid is not alive — `_pid_alive` probes `OpenProcess` on Windows,
 `os.kill(pid, 0)` elsewhere). Callers decide whether to retry with `--force-lock`.
 
-Known limitation: `slugify` lowercases, collapses non-alphanumerics and truncates at 40 chars, so two
-long, similar keys can collide onto one lock file — see [../known-gaps.md](../known-gaps.md).
+**The lock key is the RAW item key, never its slug.** `slugify` lowercases, collapses every run of
+non-alphanumerics to `-` and truncates at 40 chars on a word boundary, so `ENG-1` / `eng.1` / `ENG_1`
+and any two long keys sharing a 40-char prefix all produce the same string. Sharing one lock file
+means `poll()` silently skips the second ticket, with nothing in the log. The digest is over the raw
+key, so those cases separate; the slug stays in front so `runs/.locks/` is readable and the name is
+ASCII `[a-z0-9-]` with a bounded length. It is a truncated hash, not a bijection — two keys collide
+only on a 64-bit SHA-256 prefix collision.
 
 ## Budget — `engine/budget.py`
 

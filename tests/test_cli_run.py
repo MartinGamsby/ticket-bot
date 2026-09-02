@@ -132,3 +132,129 @@ def test_cmd_resume_defaults_to_profiles_dir_when_config_omitted(
     # cwd has no profiles/ghost-profile.yaml -- a config error, not a crash.
     exit_code = main(["resume", run.id, "--runs-dir", str(runs_dir)])
     assert exit_code == 2
+
+
+# ---- `resume` and the profile's own runs_dir -------------------------------------
+#
+# `run`/`poll` build an `Orchestrator`, which resolves `base_dir / runs_dir`.
+# `resume` has to resolve the SAME directory itself, before it can build one: the
+# run must be loaded to learn which profile it belongs to, but the profile owns the
+# directory the run lives in. `resume` used to hardcode `Path("runs")`, so a profile
+# with a custom `runs_dir` could not be resumed at all without `--runs-dir`.
+
+_PROFILE_YAML = """\
+name: custom-runs
+version: 1
+runs_dir: {runs_dir}
+source: {{type: file}}
+sink: {{type: file}}
+repo: {{type: git_local, path: "."}}
+model:
+  default: main
+  providers:
+    main: {{type: fake, name: test-model}}
+executor:
+  default: inline
+  kinds:
+    inline: {{type: api, model: main}}
+runtime: {{type: none}}
+"""
+
+
+class _RecordingOrchestrator:
+    """Stands in for the real `Orchestrator` so these tests exercise the runs-dir
+    resolution in `_cmd_resume` and nothing else -- no pipeline, no executor, no
+    lock. Records the `runs_dir` the CLI decided on."""
+
+    last: "_RecordingOrchestrator | None" = None
+
+    def __init__(self, profile, *, runs_dir=None, **kw) -> None:  # noqa: ANN001
+        self.profile = profile
+        self.runs_dir = Path(runs_dir) if runs_dir is not None else Path("runs")
+        self.store = RunStore(self.runs_dir)
+        _RecordingOrchestrator.last = self
+
+    def resume(self, run_id: str, *, force_lock: bool = False) -> Run:
+        self.resumed = (run_id, force_lock)
+        return self.store.load(run_id)
+
+
+def _seed(runs_dir: Path, profile_name: str = "custom-runs") -> Run:
+    store = RunStore(runs_dir)
+    run = store.new_run(profile_name=profile_name, item=WorkItem(id="x", title="a title"))
+    store.save(run)
+    return run
+
+
+def _write_profile(tmp_path: Path, runs_dir_value: str) -> Path:
+    profiles = tmp_path / "profiles"
+    profiles.mkdir(parents=True, exist_ok=True)
+    path = profiles / "custom-runs.yaml"
+    path.write_text(_PROFILE_YAML.format(runs_dir=runs_dir_value), encoding="utf-8")
+    return path
+
+
+def test_cmd_resume_uses_the_profiles_runs_dir_when_only_config_is_given(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr("ticketbot.cli.Orchestrator", _RecordingOrchestrator)
+    profile_path = _write_profile(tmp_path, "my-runs")
+    # `runs_dir` resolves against the PROFILE's directory, exactly as `repo.path` does
+    expected = (tmp_path / "profiles" / "my-runs").resolve()
+    run = _seed(expected)
+
+    exit_code = main(["resume", run.id, "-c", str(profile_path)])
+
+    assert exit_code == 0
+    assert _RecordingOrchestrator.last.runs_dir == expected
+    assert _RecordingOrchestrator.last.resumed == (run.id, False)
+
+
+def test_cmd_resume_runs_dir_flag_still_wins_over_the_profile(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr("ticketbot.cli.Orchestrator", _RecordingOrchestrator)
+    profile_path = _write_profile(tmp_path, "my-runs")
+    override = tmp_path / "elsewhere"
+    run = _seed(override)
+
+    exit_code = main(
+        ["resume", run.id, "-c", str(profile_path), "--runs-dir", str(override), "--force-lock"]
+    )
+
+    assert exit_code == 0
+    assert _RecordingOrchestrator.last.runs_dir == override
+    assert _RecordingOrchestrator.last.resumed == (run.id, True)
+
+
+def test_cmd_resume_falls_back_to_runs_when_neither_is_given(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """With no `-c` and no `--runs-dir` there is nothing to resolve from -- the run
+    id alone cannot name a profile -- so `runs/` under the cwd is the only answer.
+    """
+    monkeypatch.setattr("ticketbot.cli.Orchestrator", _RecordingOrchestrator)
+    monkeypatch.chdir(tmp_path)
+    _write_profile(tmp_path, "my-runs")
+    run = _seed(tmp_path / "runs")
+
+    exit_code = main(["resume", run.id])
+
+    assert exit_code == 0
+    assert _RecordingOrchestrator.last.runs_dir == Path("runs")
+
+
+def test_cmd_resume_reports_an_invalid_config_before_touching_the_store(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The `-c` branch loads the profile FIRST, so a bad profile must exit 2 with the
+    config error rather than a confusing "no such run under runs/"."""
+    monkeypatch.setattr("ticketbot.cli.Orchestrator", _RecordingOrchestrator)
+    _RecordingOrchestrator.last = None
+    bad = tmp_path / "broken.yaml"
+    bad.write_text("name: broken\nsource: {type: file}\n", encoding="utf-8")
+
+    exit_code = main(["resume", "some-run-id", "-c", str(bad)])
+
+    assert exit_code == 2
+    assert _RecordingOrchestrator.last is None

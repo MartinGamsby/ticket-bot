@@ -39,5 +39,18 @@ model:
 executor:
   default: codex-cli
   kinds:
-    codex-cli: {type: process, cmd: ["codex", "exec"], prompt: stdin, timeout_s: 1800}
+    # CREDENTIALS: same contract as every `process` executor -- the CLI
+    # authenticates itself out of its own store (`~/.codex/auth.json`, or the OS
+    # keyring), which the executor's DEFAULT_PASSTHROUGH can already reach. The
+    # names below are forwarded only when set, for the cases that store cannot
+    # cover: OPENAI_API_KEY for headless/CI, CODEX_HOME for a relocated store.
+    # Nothing else from this process's environment reaches the child, and an
+    # `env:` entry is deliberately NOT used -- a `${ENV}` ref is expanded
+    # strictly and would fail the run wherever the key is absent by design.
+    codex-cli:
+      type: process
+      cmd: ["codex", "exec"]
+      prompt: stdin
+      timeout_s: 1800
+      env_passthrough: [OPENAI_API_KEY, CODEX_HOME]
     inline:    {type: api, model: main, max_iterations: 40}

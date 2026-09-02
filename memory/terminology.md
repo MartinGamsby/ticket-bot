@@ -37,7 +37,7 @@ Domain language of `ticketbot`. One line each: term - meaning.
 - **`DEFER:`** - marker line for non-blocking follow-up work; can spawn a `fixer` step.
 - **Fan-out** (`for_each: plan.sections`) - one coder execution per `sections/section-N.md`.
 - **Budget** - cost and wall-clock caps that stop a run; not billing.
-- **Run lock** - `runs/.locks/<slug>.lock`, one work item to one run.
+- **Run lock** - `runs/.locks/<slug>-<digest>.lock`, keyed on the RAW item key; one work item to one run.
 - **Banner** - the "what was USED" summary printed and written to `runs/<id>/banner.txt`.
 - **Retire / `mark_processed`** - telling a source an item's run is terminal so polling moves on.
 - **Claim** - a source assigning the item to the bot and transitioning it; `False` means lost race.
@@ -48,7 +48,10 @@ Domain language of `ticketbot`. One line each: term - meaning.
 - **Run dir / artifacts dir** - `runs/<id>/`; the second permitted root of the path jail.
 - **Jail** - `executors/tools.py: jail()`, the single containment check for model-supplied paths.
 - **`files_written`** - an `ExecResult` field holding WORKSPACE writes only; feeds `verify_landed()`.
-- **`verify_landed()`** - repo check that a step's declared writes exist under the workspace.
+- **`verify_landed()`** - repo check that a step's DECLARED writes exist under the workspace.
+- **`drifted()`** - repo check that nothing appeared in the PARENT clone since checkout; the half
+  `verify_landed()` cannot see, since a stray write never enters `files_written`.
+- **Landing check** - the two together, run before every `commit:` step (`_landing_error`).
 
 ## Roles
 

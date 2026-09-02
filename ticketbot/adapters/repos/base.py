@@ -47,7 +47,9 @@ class Repo(Protocol):
 
     def cleanup(self) -> None: ...
 
-    def verify_landed(self, paths: Sequence[Path | str]) -> list[str]: ...
+    def verify_landed(self, paths: Sequence[Path | str]) -> list[str]: ...  # declared writes missing from the workspace
+
+    def drifted(self) -> list[str]: ...  # changes that appeared OUTSIDE the workspace since checkout
 
 
 class RepoError(RuntimeError):

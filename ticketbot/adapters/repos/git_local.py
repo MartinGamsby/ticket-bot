@@ -1,7 +1,10 @@
 """`GitLocalRepo` -- an isolated `git worktree` per branch, one commit per pipeline
 step via `git commit -F <utf8 file>` (never an inline multiline message), `diff()`
-for the reviewer, and `verify_landed()` -- the "a clean agent summary is not proof
-the edit is in the right tree" lesson, made executable.
+for the reviewer, and the pair `verify_landed()` + `drifted()` -- the "a clean agent
+summary is not proof the edit is in the right tree" lesson, made executable.
+`verify_landed()` audits the paths a step DECLARED; `drifted()` watches the parent
+clone, which is where a stray write actually goes and where nothing the step
+declares would ever mention it.
 
 `branch_name()` is a security control, not cosmetics: it is the only place an
 untrusted ticket title/key becomes a git ref and, eventually, an argv element passed
@@ -96,6 +99,11 @@ class GitLocalRepo:
         self._workspace: Path | None = None
         self._branch: str | None = None
         self._start_sha: str | None = None
+        # Porcelain status of the PARENT clone as `checkout()` left it. `None`
+        # means "drift is not observable here" -- before checkout, and under
+        # `isolation: inplace`, where the workspace IS the parent clone. See
+        # `drifted()`.
+        self._parent_baseline: set[str] | None = None
 
     # ------------------------------------------------------------------ #
     # branch naming
@@ -162,6 +170,7 @@ class GitLocalRepo:
             self._workspace = self.path.resolve()
             self._branch = branch
             self._start_sha = self._rev_parse(self._workspace, "HEAD")
+            self._parent_baseline = None  # workspace IS the parent clone
             return self._workspace
 
         if self.isolation != "worktree":
@@ -185,6 +194,9 @@ class GitLocalRepo:
         self._workspace = wt.resolve()
         self._branch = branch
         self._start_sha = self._rev_parse(self._workspace, "HEAD")
+        # Taken AFTER `worktree add`, so whatever that wrote into the parent clone
+        # is part of the baseline and can never be reported as drift.
+        self._parent_baseline = self._parent_porcelain()
         return self._workspace
 
     # ------------------------------------------------------------------ #
@@ -194,6 +206,44 @@ class GitLocalRepo:
     def status(self) -> list[str]:
         result = run_git(["status", "--porcelain"], cwd=self.workspace())
         return [line for line in result.stdout.splitlines() if line]
+
+    def _runs_pathspec(self) -> list[str]:
+        """Pathspec args that keep ticketbot's OWN run directory out of the parent
+        clone's porcelain output.
+
+        `runs/` at the project root is a natural place to put `runs_dir`, and then
+        every step writes artifacts into a tree that is also the repo being worked
+        on. Those are the engine's files, not an agent's stray edit, so they must
+        never read as drift. The whole runs dir is excluded (not just this run's
+        subdirectory) because git collapses an untracked tree to a single `?? runs/`
+        line, which a narrower exclusion could not suppress.
+        """
+        if self.run_dir is None:
+            return []
+        try:
+            rel = self.run_dir.resolve().parent.relative_to(self.path)
+        except ValueError:
+            return []  # the runs dir is outside the clone: nothing to exclude
+        return ["--", ".", f":(exclude){rel.as_posix()}"]
+
+    def _parent_porcelain(self) -> set[str]:
+        """`git status --porcelain` in the PARENT clone, as a set of non-empty
+        lines, minus the runs dir.
+
+        Unlike `status()` this never raises: it backs `drifted()`, and a drift
+        probe that could throw would turn a diagnostic into a new way to fail a
+        run. An unreadable or missing tree reports "no changes", which is the
+        direction that cannot invent a failure.
+        """
+        try:
+            result = run_git(
+                ["status", "--porcelain", *self._runs_pathspec()], cwd=self.path, check=False
+            )
+        except RepoError:
+            return set()
+        if result.returncode != 0:
+            return set()
+        return {line for line in result.stdout.splitlines() if line.strip()}
 
     def _diff_base(self) -> str:
         if self.base_branch:
@@ -263,15 +313,23 @@ class GitLocalRepo:
         return None
 
     # ------------------------------------------------------------------ #
-    # verify_landed -- the worktree-drift lesson, made executable
+    # verify_landed / drifted -- the worktree-drift lesson, made executable
     # ------------------------------------------------------------------ #
 
     def verify_landed(self, paths: Sequence[Path | str]) -> list[str]:
         """Return the subset of `paths` that do NOT exist under the workspace.
 
-        A spawned coding CLI does not inherit our working directory and may write to
-        the parent clone instead of the worktree. A clean summary from an agent is
-        NOT proof the edit is in the right tree.
+        A containment-and-existence check on paths someone else declared, and only
+        that. It is the SECOND half of the drift story, not the first: today every
+        caller feeds it `ExecResult.files_written`, which both executors derive
+        from a snapshot of the workspace itself, so those paths are inside the
+        workspace by construction and this returns `[]` every time. It still earns
+        its place -- it is what stops a future executor that trusts an agent's own
+        "files I edited" list from committing a path that is absent, or that points
+        clean outside the tree -- but it CANNOT see a write that went to the parent
+        clone, because such a write never enters `files_written` at all.
+
+        `drifted()` is the half that sees that. Call both before committing.
 
         Accepts absolute or workspace-relative paths; an absolute path outside the
         workspace counts as missing and is named as such.
@@ -289,6 +347,31 @@ class GitLocalRepo:
             if not resolved.exists():
                 missing.append(label)
         return missing
+
+    def drifted(self) -> list[str]:
+        """Porcelain lines that are dirty in the PARENT clone now but were not when
+        `checkout()` finished -- i.e. the spawned agent edited `self.path` instead
+        of the worktree it was pointed at, and then returned a clean summary.
+
+        This is the signal `verify_landed()` structurally cannot produce: a write
+        outside the workspace leaves NO trace in `files_written`, so the only
+        evidence is in the tree that received it.
+
+        It cannot false-positive on a step that legitimately changes nothing. The
+        answer is a set DIFFERENCE against a baseline taken at checkout, so:
+          - a reviewer that finds no problems, a `when:`-skipped step, a `for_each`
+            section that writes nothing -> parent clone unchanged -> `[]`;
+          - a parent clone that was already dirty before the run (a developer's own
+            work in progress) is in the baseline -> `[]`;
+          - `worktree add`'s own effects are in the baseline -> `[]`.
+
+        Returns `[]` -- "not observable", never "clean" -- before `checkout()` and
+        under `isolation: inplace`, where the workspace IS the parent clone and no
+        tree exists that a stray write could land in *instead*.
+        """
+        if self._parent_baseline is None:
+            return []
+        return sorted(self._parent_porcelain() - self._parent_baseline)
 
     def parent_clone_hint(self) -> str:
         ws = self._workspace if self._workspace is not None else self.path

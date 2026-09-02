@@ -44,7 +44,25 @@ executor:
     # `claude -p` and its flags are the harness's contract, not the Anthropic API's
     # -- that is exactly why they live here in YAML instead of in code: swapping the
     # CLI, or changing a flag, is a config edit, never a code change.
-    claude-cli: {type: process, cmd: ["claude", "-p"], prompt: stdin, timeout_s: 1800}
+    #
+    # CREDENTIALS: the CLI authenticates ITSELF. On a developer machine `claude -p`
+    # signs in from its own credential store (an OAuth profile under the user's
+    # home, or the OS keyring), which `ProcessExecutor.DEFAULT_PASSTHROUGH` can
+    # already reach -- nothing needs declaring. The two names below are forwarded
+    # only for the cases that store cannot cover, and only when they are actually
+    # set in the parent environment (an unset name is skipped, never an error):
+    #   ANTHROPIC_API_KEY  headless/CI, where there is no interactive login
+    #   CLAUDE_CONFIG_DIR  a relocated credential store
+    # Nothing else from this process's environment reaches the child. Do NOT move
+    # the key to `env: {ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"}` -- `${ENV}`
+    # refs are expanded strictly, so that spelling makes the profile FAIL on every
+    # machine that authenticates by OAuth instead of by key.
+    claude-cli:
+      type: process
+      cmd: ["claude", "-p"]
+      prompt: stdin
+      timeout_s: 1800
+      env_passthrough: [ANTHROPIC_API_KEY, CLAUDE_CONFIG_DIR]
     inline:     {type: api, model: claude-opus, max_iterations: 40}
 
 runtime:

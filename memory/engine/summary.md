@@ -30,7 +30,7 @@ anything. Only then does `repo.checkout(branch)` run and `extra["branch"]/["work
 recorded.
 
 `--dry-run` wraps the sink in `DryRunSink` and the repo in `_DryRunRepo`: local operations (checkout,
-commit, diff, verify_landed, cleanup) still really happen, but `push()` and `open_pr()` become log
+commit, diff, the landing check, cleanup) still really happen, but `push()` and `open_pr()` become log
 lines in `dryrun.log`, so nothing outward-facing occurs.
 
 ## One step
@@ -46,7 +46,7 @@ flowchart TD
     F --> G["render role prompt, executor.run(ExecRequest)"]
     G --> H["charge budget, check caps"]
     H --> I["result.error? fail (or continue if optional)"]
-    I --> J["commit: verify_landed then repo.commit"]
+    I --> J["commit: landing check (verify_landed + drifted) then repo.commit"]
     J --> K["QUESTION: -> on_question"]
     K --> L["DEFER: -> spawn fixer (max 2)"]
     L --> M["save run.json"] --> E
@@ -94,7 +94,7 @@ once the cap is passed — writes `question.md`, and on a `block` decision comme
 transitions through the sink before stopping. `fail` stops immediately; `ignore` records the question
 and continues. `on_defer: spawn_fixer` runs the `fixer` role once per `DEFER:` line, capped at
 `MAX_DEFERS_SPAWNED_PER_STEP = 2`, reusing the parent step's tools and executor, and committing only
-when `verify_landed` is clean.
+when the landing check is clean (a bad landing there is logged, never fatal — the fixer is advisory).
 
 Related: [run-store.md](run-store.md), [gates-locks-budget.md](gates-locks-budget.md),
 [reporting.md](reporting.md).

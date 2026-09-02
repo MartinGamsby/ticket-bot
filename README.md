@@ -147,7 +147,12 @@ model:
 executor:
   default: claude-cli
   kinds:
-    claude-cli: {type: process, cmd: ["claude", "-p"], prompt: stdin, timeout_s: 1800}
+    claude-cli:
+      type: process
+      cmd: ["claude", "-p"]
+      prompt: stdin
+      timeout_s: 1800
+      env_passthrough: [ANTHROPIC_API_KEY, CLAUDE_CONFIG_DIR]
 
 runtime: {type: solari, mode: desktop, resolution: "1280x720", screenshot_on: [verify, publish]}
 ```
@@ -155,6 +160,22 @@ runtime: {type: solari, mode: desktop, resolution: "1280x720", screenshot_on: [v
 Every secret above is an `${ENV}` reference — `ticketbot validate` on this exact
 file succeeds with none of those variables set, because nothing is expanded until
 an adapter is actually constructed at run time.
+
+**A spawned coding CLI authenticates itself.** `executor: {type: process}` builds
+the child's environment from an allowlist, never `os.environ` wholesale, and the
+default list carries only non-secret *locators* — `USERPROFILE`/`APPDATA`/
+`LOCALAPPDATA` on Windows, `HOME`/`XDG_*` on POSIX, plus `XDG_RUNTIME_DIR` and
+`DBUS_SESSION_BUS_ADDRESS` so a Secret Service keyring is reachable at all — so
+`claude -p` and `codex exec` find the OAuth profile or keyring entry they
+already signed in with. No API key is ever forwarded by default. A profile that
+needs one (headless, CI, no interactive login) names it in that executor kind's
+own `env_passthrough:`, as above: the name is forwarded only when it is actually
+set in the parent environment, and a forwarded name that reads like a credential
+(`*_KEY`, `*_TOKEN`, `*_SECRET`, …) is registered with the redactor so the
+child's own output can never echo it into `runs/<id>/logs/`. Use
+`env_passthrough:`, not `env: {ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"}` —
+`${ENV}` refs are expanded strictly, so that spelling fails the run on every
+machine that authenticates by OAuth rather than by key.
 
 ## Pipelines
 
@@ -188,9 +209,10 @@ on_defer: spawn_fixer
 ```
 
 A step's `commit:` is rendered with the same `{placeholder}` values its prompt
-gets (plus `{section.*}` inside a `for_each` fan-out) and committed only after
-`verify_landed()` confirms the step's declared writes are really under the
-workspace. A step's `model:`/`executor:` are the slot and kind NAMES to look up;
+gets (plus `{section.*}` inside a `for_each` fan-out) and committed only after the
+landing check passes: `verify_landed()` confirms the step's declared writes are
+really under the workspace, and `drifted()` confirms nothing appeared in the
+parent clone. A step's `model:`/`executor:` are the slot and kind NAMES to look up;
 omitting them (as `defaults:` above does) is what selects `model.default` /
 `executor.default` — the literal string `"default"` is not a sentinel, it is just
 another name to resolve. `isolation: worktree` is recorded but advisory: the repo
@@ -347,8 +369,10 @@ configures. It is off (`runtime: {type: none}`) by default.
   shell string — with an explicit env allowlist.
 - `when:` is a restricted parser, **never `eval`**; profile/pipeline YAML is
   always loaded with `yaml.safe_load`.
-- **One work item, one run** — a file lock (`runs/.locks/<item>.lock`) prevents
-  two runs racing the same ticket; `--force-lock` breaks a stale one deliberately.
+- **One work item, one run** — a file lock (`runs/.locks/<slug>-<digest>.lock`,
+  the digest taken from the raw item key so two tickets whose slugs collide never
+  share a lock) prevents two runs racing the same ticket; `--force-lock` breaks a
+  stale one deliberately.
 - **Cost and wall-clock budgets** (`budget.max_cost_usd`/`max_wall_clock_s`) stop
   a run before it can spend unboundedly; treat them as guard rails, not billing.
 - **Secrets are `${ENV}` references only** — expanded at use time, registered with
@@ -356,11 +380,19 @@ configures. It is off (`runtime: {type: none}`) by default.
   value seen) from `config.resolved.yaml`, every run artifact, and every log line.
 - **No auto-merge, anywhere.** `gates.on_pr_ready: human_review` opens the PR and
   stops the run for a human; `auto` still never means "merge", only "don't pause".
-- `GitLocalRepo.verify_landed()` checks that a coder's declared file writes
-  actually exist under the workspace before committing — a clean agent summary is
-  not proof the edit landed in the right tree. It is given a step's *workspace*
-  writes only; run-directory artifacts (a screenshot, `plan.md`) are excluded, so
-  producing one can never be mistaken for an edit that landed in the wrong tree.
+- **A clean agent summary is not proof the edit landed in the right tree**, so
+  every `commit:` step is checked twice before it commits.
+  `GitLocalRepo.verify_landed()` audits the paths the step *declared*: they must
+  exist and be inside the workspace. It is given a step's workspace writes only —
+  run-directory artifacts (a screenshot, `plan.md`) are excluded, so producing one
+  is never mistaken for a stray edit. `GitLocalRepo.drifted()` covers what that
+  audit structurally cannot see: a spawned CLI that ignored its cwd and edited the
+  **parent clone** leaves nothing in the declared list, because that list comes
+  from a snapshot of the workspace. `drifted()` diffs the parent clone's
+  `git status` against a baseline taken at checkout, so a pre-existing dirty tree,
+  the run directory, and a step that legitimately changes nothing (a reviewer with
+  no findings) are all silent — only a *new* change outside the workspace fails the
+  step, naming the paths and the clone they landed in.
 
 ## Development
 

@@ -10,6 +10,7 @@ anything by itself. The enforcement is the atomic file creation.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import socket
@@ -20,6 +21,33 @@ from typing import Any
 from ..core.workitem import slugify
 
 DEFAULT_STALE_AFTER_S = 21600  # 6 hours
+
+_KEY_DIGEST_LEN = 16  # 64 bits of SHA-256; see `lock_filename`
+
+
+def lock_filename(key: str) -> str:
+    """`<slug>-<16 hex of sha256(raw key)>.lock`.
+
+    The slug ALONE is not a key: `slugify()` lowercases, collapses every run of
+    non-alphanumerics to a single '-' and truncates at 40 chars on a word boundary,
+    so `ENG-1` and `eng.1`, or two long keys sharing a 40-char prefix, produce the
+    same string. Two distinct work items would then share one lock file and
+    `poll()` would silently skip whichever it reached second -- a dropped ticket,
+    with nothing in the log to say so.
+
+    The suffix is a digest of the RAW key, so the pair `(slug, digest)` separates
+    every case the slug alone loses. It is a truncated hash, not a bijection: two
+    keys collide only on a 64-bit SHA-256 prefix collision, which no realistic
+    number of work items reaches (~1 in 10^13 at a million distinct keys) and
+    which no attacker gains anything from -- versus the slug, which collides on
+    ordinary inputs a tracker hands out every day.
+
+    The slug stays in FRONT so `runs/.locks/` is still readable by a human running
+    `--force-lock`, and the whole name is ASCII `[a-z0-9-]` with a bounded length
+    (40 + 1 + 16 + 5) -- safe on Windows and POSIX alike.
+    """
+    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:_KEY_DIGEST_LEN]
+    return f"{slugify(key)}-{digest}.lock"
 
 
 class LockHeld(RuntimeError):
@@ -71,7 +99,7 @@ def _pid_alive(pid: int) -> bool:
 
 class RunLock:
     """One work item -> one run. Lock file:
-    `<runs_dir>/.locks/<sanitized key>.lock` containing JSON
+    `<runs_dir>/.locks/<slug>-<digest>.lock` (see `lock_filename`) containing JSON
     `{pid, host, run_id, started_at, key}`.
     """
 
@@ -83,7 +111,7 @@ class RunLock:
     def _path(self) -> Path:
         locks_dir = self.runs_dir / ".locks"
         locks_dir.mkdir(parents=True, exist_ok=True)
-        return locks_dir / f"{slugify(self.key)}.lock"
+        return locks_dir / lock_filename(self.key)
 
     def is_locked(self) -> bool:
         """Best-effort, non-mutating check: does a lock file currently exist for

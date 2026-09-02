@@ -63,6 +63,8 @@ instance still isolates correctly.
   `gh` CLI's own login.
 - `ProcessExecutor` builds the child environment from `DEFAULT_PASSTHROUGH` plus the profile's
   declared `env:`/`env_passthrough:` — never `os.environ` wholesale, so an API key in the parent
-  process is not handed to an arbitrary subprocess. See [../known-gaps.md](../known-gaps.md) for the
-  open question about which credentials the shipped `process` profiles should declare.
+  process is not handed to an arbitrary subprocess. `DEFAULT_PASSTHROUGH` carries only non-secret
+  locators so the spawned CLI can find its OWN credential store; a forwarded name that reads like
+  a credential is `register_secret()`'d. See
+  [../executors/summary.md](../executors/summary.md) for the full contract.
 - `tests/test_repo_hygiene.py` asserts no shipped profile contains a secret-shaped literal.
