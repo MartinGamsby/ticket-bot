@@ -19,5 +19,8 @@ inbox/processed/
 .ticketbot-worktrees/
 tmp/
 
+# Memory session scraps
+memory/tmp/
+
 # Local secrets
 .env
