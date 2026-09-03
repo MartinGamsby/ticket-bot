@@ -93,6 +93,9 @@ Produced by step `{step_id}` with no model call.
 
 
 class StubExecutor:
+    # Calls no model at all, so the banner must not list any.
+    uses_model_slots = False
+
     def __init__(self, cfg: AdapterConfig | None = None) -> None:
         opt = cfg.opt if cfg is not None else (lambda _k, d=None: d)
         self.sections: int = max(1, int(opt("sections", 1) or 1))

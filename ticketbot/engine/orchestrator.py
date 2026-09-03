@@ -715,10 +715,23 @@ class Orchestrator:
     ) -> BannerFacts:
         pipeline_text = f"{selection.ref}  (rule: {selection.reason})"
 
+        executor_text = ""
+        executor_obj: Any = None
+        try:
+            executor_obj = self._executor(None)
+            executor_text = executor_obj.describe()
+        except Exception as exc:  # noqa: BLE001 - banner must never crash a run
+            logger.warning("banner: could not describe default executor: %s", exc)
+
+        # Only the `api` executor turns `model:` slots into providers and calls
+        # them. Under `process` the spawned CLI picks its own model, and under
+        # `stub` nothing is called at all -- so listing the configured slots would
+        # report models that were never used. Duck-typed, like `can_exec`: an
+        # executor that says nothing is assumed to use them.
         models: list[str] = []
         seen_roles: set[str] = set()
         default_model_slot = pipeline.defaults.get("model")
-        for step in pipeline.steps:
+        for step in pipeline.steps if getattr(executor_obj, "uses_model_slots", True) else []:
             if step.role in seen_roles:
                 continue
             seen_roles.add(step.role)
@@ -728,12 +741,6 @@ class Orchestrator:
             except ConfigError:
                 continue
             models.append(f"{step.role}:{provider.describe()}")
-
-        executor_text = ""
-        try:
-            executor_text = self._executor(None).describe()
-        except Exception as exc:  # noqa: BLE001 - banner must never crash a run
-            logger.warning("banner: could not describe default executor: %s", exc)
 
         # `_repo_cfg()`, not `profile.repo`: with `--repo <path>` the run happens
         # in the OVERRIDE, and the banner reports what was used, not what was

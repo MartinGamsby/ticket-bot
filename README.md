@@ -131,6 +131,16 @@ reporting contract. Reading each step's echoed prompt is the fastest way to see
 what a role actually gets asked, with the work item and context paths already
 substituted in.
 
+The CLI prints the run directory as its last line. With no `--runs-dir`, output
+lands in **`profiles/runs/<id>/`** (next to the profile), not `runs/` at the repo
+root — see the note further down. Read `steps/<step-id>.md` to see each role's
+echoed prompt.
+
+The banner's `runtime=none` is the RUNTIME adapter (where commands run and
+screenshots come from), not the executor — `none` means "locally, no sandbox". The
+line that tells you the stub is in play is `executor=stub: no model, no network`.
+A stub run prints no `models=` line at all, because it resolves no model slots.
+
 A successful stub run ends **`blocked`, exit code 3** — `gates.on_pr_ready:
 human_review` holds it at the PR-ready gate, which is the designed terminal state,
 not a failure. `question.md` says so: *"The pull request is ready and awaiting

@@ -249,3 +249,34 @@ def test_the_offline_run_reports_the_stub_executor_in_its_banner(tmp_path, monke
 
     banner = (sorted(runs.glob("*"))[-1] / "banner.txt").read_text(encoding="utf-8")
     assert "stub: no model, no network" in banner
+
+
+def test_the_banner_lists_no_models_when_the_executor_calls_none(tmp_path, monkeypatch):
+    """A `models=` line on a stub run would name eight Claude models that were
+    never constructed. Only the `api` executor resolves `model:` slots."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    repo = _scratch_repo(tmp_path)
+    runs = tmp_path / "runs"
+
+    main(
+        ["run", "-c", PROFILE, "--input-text", "Add a thing",
+         "--repo", str(repo), "--runs-dir", str(runs)]
+    )
+
+    banner = (sorted(runs.glob("*"))[-1] / "banner.txt").read_text(encoding="utf-8")
+    assert "models=" not in banner
+    assert "executor=stub: no model, no network" in banner
+
+
+@pytest.mark.parametrize(
+    "module, cls, expected",
+    [
+        ("ticketbot.executors.api_loop", "ApiLoopExecutor", True),
+        ("ticketbot.executors.process", "ProcessExecutor", False),
+        ("ticketbot.executors.stub", "StubExecutor", False),
+    ],
+)
+def test_each_executor_declares_whether_it_resolves_model_slots(module, cls, expected):
+    import importlib
+
+    assert getattr(importlib.import_module(module), cls).uses_model_slots is expected

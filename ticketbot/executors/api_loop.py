@@ -38,6 +38,10 @@ MAX_LOGGED_TOOL_RESULT_CHARS = 2000
 
 
 class ApiLoopExecutor:
+    # This executor IS the thing that resolves `model:` slots into providers and
+    # calls them, so the banner's `models=` line is meaningful for it.
+    uses_model_slots = True
+
     def __init__(
         self, cfg: AdapterConfig, *, provider: ModelProvider, runtime: Any | None = None
     ) -> None:

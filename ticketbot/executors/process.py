@@ -72,6 +72,11 @@ _TREE_KILL_GRACE_S = 5
 
 
 class ProcessExecutor:
+    # The spawned CLI chooses its own model; ticketbot's `model:` slots are never
+    # constructed. Listing them in the banner would claim a model was used that
+    # never was -- see `Orchestrator._banner_facts`.
+    uses_model_slots = False
+
     def __init__(self, cfg: AdapterConfig) -> None:
         cmd = cfg.opt("cmd")
         if not isinstance(cmd, list) or not cmd or not all(isinstance(c, str) for c in cmd):
