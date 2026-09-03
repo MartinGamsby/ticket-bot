@@ -138,3 +138,18 @@ never following symlinked directories, and stopping after 20 000 files with a wa
 text)` never scrubs — callers redact first.
 
 See also: [tools.md](tools.md), [path-jail.md](path-jail.md).
+
+## `uses_model_slots` - who may claim a model was used
+
+A class attribute on every executor, read by `Orchestrator._banner_facts` via `getattr(..., True)`:
+
+| Executor | `uses_model_slots` | Why |
+|---|---|---|
+| `ApiLoopExecutor` | `True` | it resolves `model:` slots into providers and calls them |
+| `ProcessExecutor` | `False` | the spawned CLI picks its own model; the slot is never constructed |
+| `StubExecutor` | `False` | nothing is called at all |
+
+When it is False the banner OMITS the `models=` line entirely. It previously built a provider per
+role regardless, so a stub run advertised eight Claude models it never touched - which is exactly
+how a working offline run gets mistaken for one that is still calling Anthropic. An executor that
+declares nothing is assumed True, so a third-party executor keeps the old behaviour.

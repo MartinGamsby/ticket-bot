@@ -28,7 +28,9 @@ defects this codebase hit; they are the reason this Memory exists.
    pause", never "merge". See [engine/gates-locks-budget.md](engine/gates-locks-budget.md).
 8. **The banner reports what was USED, not what was configured.** Build its facts from live adapter
    objects and the effective config (`_repo_cfg()`, which honours `--repo`), never from
-   `profile.<block>`. See [engine/run-store.md](engine/run-store.md).
+   `profile.<block>`. A line it cannot honestly fill is OMITTED, not filled from config: the
+   `models=` line appears only when the executor actually resolves model slots
+   (`uses_model_slots`). See [engine/run-store.md](engine/run-store.md).
 9. **The engine closes what it opens.** `_run_pipeline` closes the sink it built (the real one, not
    the `--dry-run` wrapper, which deliberately never touches its inner sink); `run_once`/`resume`/
    `poll` each close the source they opened; `poll` also calls `mark_processed(item)`.
@@ -37,8 +39,14 @@ defects this codebase hit; they are the reason this Memory exists.
 11. **`str.format` is banned for prompts.** Prompts carry literal braces (JSON, code fences);
     `core/templating.py: render()` is brace-safe and leaves unknown placeholders untouched.
 12. **Keep source files under 350 lines** and decompose past that, unless the content is genuinely
-    indivisible. `engine/orchestrator.py` (1144 lines) is the standing exception and the obvious
-    candidate for a split.
+    indivisible. Five are currently past it: `engine/orchestrator.py` (1215), `core/predicate.py`
+    (605), `executors/tools.py` (520), `adapters/repos/git_local.py` (473) and
+    `adapters/runtimes/solari.py` (468). The orchestrator is the obvious candidate for a split.
+13. **A config file nobody reads is worse than no config file.** `.env` sat in `.gitignore` for a
+    whole build before anything loaded it. Ship the reader with the example, or ship neither.
+14. **A doc claim is a test that runs on a human.** "No API key needed", "produces `runs/<id>/`",
+    a bare `ticketbot ...` command — each was false and each cost real debugging time. Run the
+    command from the README before claiming what it does.
 
 ## Conventions
 
@@ -63,3 +71,9 @@ defects this codebase hit; they are the reason this Memory exists.
 | `source.read` returned `""` because nothing filled `ToolContext.work_item_text` | The engine fills `ExecRequest.work_item_text`; executors never see a `WorkItem` | [executors/tools.md](executors/tools.md) |
 | Every LOCAL write was scrubbed while the identical text went to Jira/GitHub/git history in the clear, making the world-readable copy the leakiest one | Redaction is a property of the BOUNDARY, not of the filesystem: scrub at every point text leaves the machine | [config/secrets-and-redaction.md](config/secrets-and-redaction.md) |
 | A security gate read from model output defaulted to "off" when the marker was absent, so *omitting* a line disabled the security step more cheaply than lying in one | A gate fed by model output fails CLOSED: absent means unknown, and unknown runs the check | [pipelines/predicates.md](pipelines/predicates.md) |
+| The stub executor echoed the prompt it received, and `finish_result()` parsed the role prompt's own `QUESTION:` protocol text back out of it — so the stub raised a question it never asked and blocked the run | Text a step ECHOES is data, not protocol. Only parse markers out of text a step AUTHORED | [executors/summary.md](executors/summary.md) |
+| The stub reported its run-dir artifacts in `files_written`; the landing check fails a step whose declared paths are outside the workspace, so `verify` killed its own run — the same shape as an earlier screenshot bug | `files_written` means WORKSPACE writes. Run-dir artifacts belong in the summary and the step log | [executors/summary.md](executors/summary.md) |
+| The intake JSON block was appended AFTER the echoed prompt, and `_extract_json_block()` takes the FIRST fence — which was one of the role prompt's own examples | When a consumer takes "the first" of something, emit yours before any text you did not author | [executors/summary.md](executors/summary.md) |
+| The banner listed eight Claude models on a run that called none, because it built a provider per role regardless of the executor — making a working stub run look like it was still hitting Anthropic | Report per-execution facts from the executor's declared capability, not from the config that was merely present | [engine/run-store.md](engine/run-store.md) |
+| A Ctrl+C'd run left its worktree and branch behind, and the retry died on `already checked out` with a raw traceback | `checkout()` prunes stale worktree records and REUSES one left by an earlier run of the same branch; `RepoError` and `KeyboardInterrupt` are caught at the CLI | [adapters/repos.md](adapters/repos.md) |
+| Branch names repeated themselves (`agent/add-a-health-endpoint-add-a-health-endpoint`) because a file item's `key` falls back to its `id`, which IS the slug | Blank `{ticket_key}` when its slugified form equals the slug, and collapse the separator run the empty slot leaves | [adapters/repos.md](adapters/repos.md) |

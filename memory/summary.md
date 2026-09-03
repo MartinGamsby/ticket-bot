@@ -22,12 +22,20 @@ Nothing auto-merges, anywhere.
 | change a pipeline or a role prompt | [pipelines/summary.md](pipelines/summary.md), [pipelines/role-prompts.md](pipelines/role-prompts.md) |
 | trace what the run loop does | [engine/summary.md](engine/summary.md) |
 | touch the path jail or a tool | [executors/path-jail.md](executors/path-jail.md) |
+| run the whole thing with no model or credentials | [executors/summary.md](executors/summary.md) |
 | avoid a trap this codebase already hit | [practices.md](practices.md) |
 | know what is deliberately unfinished | [known-gaps.md](known-gaps.md) |
 
 ## State
 
-Suite: `uv run pytest` from the repo root — 875 passed, 0 skipped. No test touches the network, a
-real coding CLI, or a real Jira/GitHub/Solari account. See [testing/summary.md](testing/summary.md).
+Suite: `uv run pytest` from the repo root — **1026 passed, 0 skipped**, 46 test modules. No test
+touches the network, a real model, a real coding CLI, or a real Jira/GitHub/Solari account. See
+[testing/summary.md](testing/summary.md).
+
+A run needs a model only if its executor uses one. Three do different things:
+`stub` (calls nothing — `profiles/file-stub-offline.yaml`, the genuinely offline path),
+`process` (spawns a coding CLI that authenticates itself — `file-claude-cli.yaml`, no key), and
+`api` (ticketbot's own tool loop against a provider — `file-text-none.yaml`, needs a key).
+Seven profiles ship. See [config/summary.md](config/summary.md).
 
 Full index: [memory-map.md](memory-map.md). Vocabulary: [terminology.md](terminology.md).

@@ -1,7 +1,7 @@
 # Testing conventions
 
-`uv run pytest` from the repo root. 875 passed, 0 skipped. `pyproject.toml` sets
-`testpaths = ["tests"]`; the dev extra is `pytest` + `pytest-cov`.
+`uv run pytest` from the repo root. **1026 passed, 0 skipped**, across 46 test modules.
+`pyproject.toml` sets `testpaths = ["tests"]`; the dev extra is `pytest` + `pytest-cov`.
 
 ## Hard rules
 
@@ -72,3 +72,19 @@ Owns the joins no single module owns, and nothing else:
 
 Mutation-check the test: revert the production fix and confirm the new test fails. Every test added
 during the build's review pass was checked that way, so none of them passes for the wrong reason.
+
+## The real offline end-to-end
+
+`tests/test_executor_stub.py` drives the SHIPPED `profiles/file-stub-offline.yaml` through
+`cli.main()` against a throwaway git repo, with `ANTHROPIC_API_KEY`, `JIRA_API_TOKEN`,
+`GITHUB_TOKEN` and `SOLARI_API_KEY` all `monkeypatch.delenv`'d. It asserts every step's status
+(`intake`/`plan`/`implement`/`verify`/`review`/`publish` ok, `clarify`/`security` skipped), the full
+artifact list, and exit code **3** — `blocked` at the human-review gate is the designed terminal
+state for a SUCCESSFUL run, not a failure.
+
+This is the test that would have caught the four seam blockers, because it uses no fake at all: the
+real profile, the real pipeline, the real adapters, and an executor whose only fakeness is that it
+declines to think. Prefer extending it over adding another fake.
+
+`tests/test_e2e_offline.py` is the older sibling, driving the same shape through the executor
+registry with `FakeExecutor`.
