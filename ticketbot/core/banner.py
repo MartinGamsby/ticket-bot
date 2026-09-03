@@ -120,10 +120,20 @@ def facts_from_profile(profile: Profile) -> BannerFacts:
     mode / resolution when present), repo from repo.type (+ clone/path). Used by
     `ticketbot config banner`.
     """
-    models = [
-        f"{slot}:{_describe_model(cfg)}" for slot, cfg in profile.model.providers.items()
-    ]
     executor_cfg = profile.executor.kinds.get(profile.executor.default)
+
+    # Only an `api` executor resolves `model:` slots into providers and calls them.
+    # Under `process` the spawned CLI picks its own model, and under `stub` nothing
+    # is called at all -- listing the configured slots would advertise models this
+    # profile can never use. Mirrors `Orchestrator._banner_facts`, which asks the
+    # live executor object via `uses_model_slots`; here only the config exists, so
+    # the decision is made from the kind's `type`.
+    uses_models = executor_cfg is None or executor_cfg.type == "api"
+    models = (
+        [f"{slot}:{_describe_model(cfg)}" for slot, cfg in profile.model.providers.items()]
+        if uses_models
+        else []
+    )
 
     return BannerFacts(
         source="",

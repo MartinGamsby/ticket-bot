@@ -28,6 +28,19 @@ Decide deliberately. Do not assume the templates are live.
 
 ## Open engineering items
 
+- **Solari can run commands, or take screenshots, but never both in one mode.**
+  `can_exec` is True only for `mode: sandbox`, and `screenshot()` returns `None`
+  for exactly that mode; `desktop` and `browser` screenshot a real screen but have
+  no command surface, so `shell.run` falls back to running LOCALLY. The tool
+  catalogue also has no navigate/click/type tool, so nothing in a pipeline can
+  drive a desktop or a browser. Consequence: a Solari run today produces a genuine
+  PNG of a machine ticketbot never touched — the wiring is proven, the picture is
+  not evidence of the work. Closing it means one of: a `sandbox`-mode screenshot
+  via a headless browser inside the VM plus `previewUrl`, browser-driving tools in
+  the catalogue (`browser.goto`/`click`/`type`), or a documented two-runtime
+  arrangement. A product decision, not a patch. `profiles/file-solari-stub.yaml`
+  exercises the real session lifecycle cheaply in the meantime.
+
 - **The parent-clone drift check is baseline-relative, not authoritative.** `GitLocalRepo.drifted()`
   compares the parent clone's `git status` against a snapshot taken at `checkout()`, so it reports
   only what appeared DURING the run. That is what makes it false-positive-free, but it also means a
