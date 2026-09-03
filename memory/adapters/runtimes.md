@@ -4,6 +4,20 @@ A runtime is WHERE a step's shell commands run and WHERE its screenshots come fr
 model, and it is not the executor. `executors/tools.py`'s `shell.run` and `runtime.screenshot`
 handlers call straight through the protocol.
 
+## What each mode can actually do
+
+| mode | `can_exec` | `screenshot()` | `preview_url()` |
+|---|---|---|---|
+| `sandbox` | **True** - commands run in the VM | **None** - no screen | a public `*.preview.getsolari.com` URL |
+| `desktop` | False - `shell.run` falls back to LOCAL | real PNG of the VM screen | None |
+| `browser` | False - `shell.run` falls back to LOCAL | real PNG of a page | None |
+
+The two capabilities are disjoint, and nothing in the pipeline drives a desktop or
+a browser (no navigate/click/type tool exists), so a screenshot today shows a
+machine the run never touched. Recorded in [../known-gaps.md](../known-gaps.md).
+`profiles/file-solari-stub.yaml` pairs the real runtime with `executor: stub` to
+exercise session create/connect/screenshot/teardown for the price of no tokens.
+
 ## `can_exec` — never gate on `runtime is not None`
 
 **A `Runtime` is always a real object, even when it does nothing.** `NoneRuntime` is not `None`; its
