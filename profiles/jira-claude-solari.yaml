@@ -1,0 +1,73 @@
+# The full vertical: Jira source + sink, GitHub PR as a secondary sink, a GitHub
+# repo, Claude Opus 5 (+ Haiku for intake, + gpt-5 as a peer reviewer), and a Solari
+# desktop runtime for screenshots. Every secret is an ${ENV} reference -- never a
+# literal value, not even a placeholder-looking one.
+extends: _base.yaml
+name: jira-claude-solari
+version: 1
+
+source:
+  type: jira
+  base_url: https://acme.atlassian.net
+  email: ${JIRA_EMAIL}
+  token: ${JIRA_API_TOKEN}
+  jql: 'assignee = currentUser() AND status = "To Do" AND labels = agent'
+  poll_seconds: 60
+  points_field: customfield_10016
+  account_id: ${JIRA_BOT_ACCOUNT_ID}
+
+sink:
+  type: jira
+  base_url: https://acme.atlassian.net
+  email: ${JIRA_EMAIL}
+  token: ${JIRA_API_TOKEN}
+  also: [{type: github_pr, token: "${GITHUB_TOKEN}"}, {type: file}]
+
+repo:
+  type: github
+  clone: git@github.com:acme/app.git
+  base_branch: main
+  branch_template: "agent/{ticket_key}-{slug}"
+  token: ${GITHUB_TOKEN}
+  draft_pr: true
+
+model:
+  default: claude-opus
+  providers:
+    claude-opus: {type: anthropic, model: claude-opus-5, effort: xhigh}
+    cheap:       {type: anthropic, model: claude-haiku-4-5, effort: low}
+    peer:        {type: openai_compat, base_url: "${PEER_BASE_URL}", api_key: "${PEER_API_KEY}", model: gpt-5}
+
+executor:
+  default: claude-cli
+  kinds:
+    # `claude -p` and its flags are the harness's contract, not the Anthropic API's
+    # -- that is exactly why they live here in YAML instead of in code: swapping the
+    # CLI, or changing a flag, is a config edit, never a code change.
+    #
+    # CREDENTIALS: the CLI authenticates ITSELF. On a developer machine `claude -p`
+    # signs in from its own credential store (an OAuth profile under the user's
+    # home, or the OS keyring), which `ProcessExecutor.DEFAULT_PASSTHROUGH` can
+    # already reach -- nothing needs declaring. The two names below are forwarded
+    # only for the cases that store cannot cover, and only when they are actually
+    # set in the parent environment (an unset name is skipped, never an error):
+    #   ANTHROPIC_API_KEY  headless/CI, where there is no interactive login
+    #   CLAUDE_CONFIG_DIR  a relocated credential store
+    # Nothing else from this process's environment reaches the child. Do NOT move
+    # the key to `env: {ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"}` -- `${ENV}`
+    # refs are expanded strictly, so that spelling makes the profile FAIL on every
+    # machine that authenticates by OAuth instead of by key.
+    claude-cli:
+      type: process
+      cmd: ["claude", "-p"]
+      prompt: stdin
+      timeout_s: 1800
+      env_passthrough: [ANTHROPIC_API_KEY, CLAUDE_CONFIG_DIR]
+    inline:     {type: api, model: claude-opus, max_iterations: 40}
+
+runtime:
+  type: solari
+  mode: desktop
+  resolution: "1280x720"
+  timeout_ms: 600000
+  screenshot_on: [verify, publish]

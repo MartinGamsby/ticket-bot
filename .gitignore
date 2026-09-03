@@ -1,8 +1,26 @@
-node_modules/
-package-lock.json
-.env
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
 .venv/
 venv/
-screenshot.png
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ticketbot
+runs/
+outbox/
+inbox/processed/
+.ticketbot-worktrees/
+tmp/
+
+# Memory session scraps
+memory/tmp/
+
+# Local secrets
+.env

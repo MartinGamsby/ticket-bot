@@ -1,0 +1,58 @@
+name: tiny
+defaults: {executor: default, model: default, timeout_s: 60}
+steps:
+  - id: intake
+    role: ingest
+    prompt: prompts/roles/ingest.md
+    tools: [source.read]
+    produces: [workitem.json]
+  - id: clarify
+    role: clarifier
+    prompt: prompts/roles/clarifier.md
+    when: "workitem.acceptance is empty or workitem.ambiguity >= medium"
+    tools: [sink.comment, sink.unassign]
+    on_block: blocked
+  - id: plan
+    role: planner
+    prompt: prompts/roles/planner.md
+    produces: [plan.md, sections/]
+  - id: implement
+    role: coder
+    prompt: prompts/roles/coder.md
+    for_each: plan.sections
+    tools: [fs.read, fs.write, fs.edit, shell.run]
+    isolation: worktree
+    commit: "impl: {section.title}"
+  - id: verify
+    role: tester
+    prompt: prompts/roles/tester.md
+    tools: [fs.read, fs.edit, shell.run, runtime.screenshot]
+    produces: [test-report.md]
+  - id: review
+    role: reviewer
+    prompt: prompts/roles/reviewer.md
+    tools: [fs.read, fs.edit]
+    produces: [review.md]
+  - id: security
+    role: security
+    prompt: prompts/roles/security.md
+    when: "plan.security == yes or diff.touches_security"
+    produces: [security.md]
+  - id: publish
+    role: reporter
+    prompt: prompts/roles/reporter.md
+    tools: [repo.open_pr, sink.comment, sink.transition, runtime.screenshot]
+    produces: [pr.md, ticket_comment.md]
+  # Not part of the sequential flow -- `when` is unconditionally false (`step.*`
+  # is never populated in the predicate context, so `is not empty` never holds)
+  # so this step is always SKIPPED when the main loop reaches it. It exists
+  # purely so `orchestrator._spawn_fixer` can find a `role: fixer` StepDef to
+  # read a non-builtin `.prompt` override from (the real `builtin:
+  # prompts/roles/fixer.md` doesn't exist until section 9).
+  - id: fixer-template
+    role: fixer
+    prompt: prompts/roles/fixer.md
+    when: "step.id is not empty"
+    tools: [fs.read, fs.write, fs.edit]
+on_question: pause_and_relay
+on_defer: spawn_fixer

@@ -1,0 +1,9 @@
+extends: minimal.yaml
+name: child
+gates:
+  max_clarify_rounds: 5
+runtime:
+  type: local_shell
+  screenshot_on: [verify, publish]
+budget:
+  max_cost_usd: 10

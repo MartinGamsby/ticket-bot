@@ -1,0 +1,39 @@
+name: _base
+version: 1
+model:
+  default: main
+  providers:
+    main:  {type: anthropic, model: claude-opus-5, effort: xhigh}
+    cheap: {type: anthropic, model: claude-haiku-4-5, effort: low}
+    # `builtin/pipelines/standard.yaml` and `large-with-clarification.yaml` send
+    # their `review` step to the `peer` slot. A profile with a real second vendor
+    # (see jira-claude-solari.yaml) overrides this with an `openai_compat`
+    # provider; without that override, review falls back to self-review with the
+    # same model as `main` rather than failing with "unknown model slot 'peer'".
+    peer:  {type: anthropic, model: claude-opus-5, effort: xhigh}
+executor:
+  default: inline
+  kinds:
+    inline: {type: api, model: main, max_iterations: 40}
+runtime: {type: none}
+pipeline_selector:
+  rules:
+    - when: {story_points: {lte: 2}, issue_type: Bug}
+      use: builtin:pipelines/small-bug.yaml
+    - when: {story_points: {lte: 5}}
+      use: builtin:pipelines/standard.yaml
+    - when: {story_points: {gte: 8}}
+      use: builtin:pipelines/large-with-clarification.yaml
+  default: builtin:pipelines/standard.yaml
+gates: {on_unclear: comment_and_unassign, on_pr_ready: human_review, max_clarify_rounds: 2}
+budget: {max_cost_usd: 25, max_wall_clock_s: 5400}
+source: {type: file}
+sink:   {type: file}
+# NO `path:` here. `extends:` deep-merges, so a `path` set in this parent survives
+# into every child -- including the two that switch to `repo: {type: github}` and
+# supply a `clone:` instead. `GithubRepo` only installs its per-repo clone cache
+# when `path` is absent, so an inherited `path: "."` makes it fetch and
+# `git worktree add` inside the PROFILE's own directory (i.e. this checkout)
+# rather than the cloned repo. `GitLocalRepo` already defaults `path` to "." on
+# its own, so leaving it out changes nothing for the file profiles.
+repo:   {type: git_local}

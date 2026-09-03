@@ -75,12 +75,3 @@ IMPORTANT: Before exploring the codebase or searching for files, ALWAYS check me
 When the session starts, briefly show that you have domain knowledge before attending to the first request.
 
 if the memory/ does not exist, ask the user if you should create one.
-
-# Committed data files
-`video_cache.uploads.tsv` (repo root) is the real, git-tracked YouTube-upload
-ledger — NOT a test artifact. Running the test suite (or opening `VideoCache` on
-its real dump path) re-exports it, so it often shows as modified after `pytest`.
-That regenerated form is still real data: commit it freely, never scrub or revert
-it out of a commit. See memory/tools/video-creation.md "Discovery cache + portable
-ledger".
-

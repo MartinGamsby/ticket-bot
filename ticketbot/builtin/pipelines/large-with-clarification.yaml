@@ -1,0 +1,31 @@
+name: large-with-clarification
+# For a large or vaguely-scoped ticket: `clarify` runs unconditionally (no `when:` --
+# a big story is worth a clarifying round even when intake judged it merely
+# `medium`), a `research` step reads the codebase before planning (role: planner,
+# read-only tools -- it returns findings via its Return-ONLY text rather than
+# writing plan.md; the engine saves that text to steps/research.md regardless of
+# the `produces:` hint below), the plan gate is mandatory (`gate: human`, not
+# `optional_human`), and both `review` and `security` run unconditionally.
+# `executor:`/`model:` are deliberately ABSENT -- see standard.yaml's comment on
+# `defaults:` for why the literal string "default" is not the right value here.
+defaults: {timeout_s: 2700}
+steps:
+  - {id: intake,  role: ingest,   model: cheap, tools: [source.read], produces: [workitem.json]}
+  - id: clarify
+    role: clarifier
+    tools: [sink.comment, sink.unassign]
+    on_block: blocked
+  - {id: research, role: planner, tools: [fs.read, fs.list], produces: [research.md]}
+  - {id: plan, role: planner, tools: [fs.read, fs.write, fs.list], produces: [plan.md, sections/], gate: human}
+  - id: implement
+    role: coder
+    for_each: plan.sections
+    tools: [fs.read, fs.write, fs.edit, fs.list, shell.run]
+    isolation: worktree
+    commit: "impl: {section.title}"
+  - {id: verify,  role: tester,   tools: [fs.read, fs.write, fs.edit, shell.run, runtime.screenshot], produces: [test-report.md], commit: "test: {ticket_key}"}
+  - {id: review,  role: reviewer, model: peer, tools: [fs.read, fs.edit], produces: [review.md], commit: "review-fix: {ticket_key}"}
+  - {id: security, role: security, tools: [fs.read, fs.edit], produces: [security.md], commit: "security-fix: {ticket_key}"}
+  - {id: publish, role: reporter, tools: [fs.read, fs.write, runtime.screenshot], produces: [pr.md, ticket_comment.md]}
+on_question: pause_and_relay
+on_defer: spawn_fixer

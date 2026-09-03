@@ -1,0 +1,28 @@
+name: standard
+# `executor:`/`model:` are deliberately ABSENT here, not set to the string
+# "default" -- a step with no `executor:`/`model:` of its own passes `None` to
+# `Orchestrator._executor()`/`_provider()`, which is what actually triggers their
+# "fall back to `profile.executor.default`/`profile.model.default`" branch. The
+# literal string "default" is just another slot/kind NAME to look up and fails
+# for every shipped profile, none of which names a slot or kind "default".
+defaults: {timeout_s: 1800}
+steps:
+  - {id: intake,  role: ingest,   model: cheap, tools: [source.read], produces: [workitem.json]}
+  - id: clarify
+    role: clarifier
+    when: "workitem.acceptance is empty or workitem.ambiguity >= medium"
+    tools: [sink.comment, sink.unassign]
+    on_block: blocked
+  - {id: plan, role: planner, tools: [fs.read, fs.write, fs.list], produces: [plan.md, sections/], gate: optional_human}
+  - id: implement
+    role: coder
+    for_each: plan.sections
+    tools: [fs.read, fs.write, fs.edit, fs.list, shell.run]
+    isolation: worktree
+    commit: "impl: {section.title}"
+  - {id: verify,  role: tester,   tools: [fs.read, fs.write, fs.edit, shell.run, runtime.screenshot], produces: [test-report.md], commit: "test: {ticket_key}"}
+  - {id: review,  role: reviewer, model: peer, tools: [fs.read, fs.edit], produces: [review.md], commit: "review-fix: {ticket_key}"}
+  - {id: security, role: security, when: "plan.security == yes or diff.touches_security", tools: [fs.read, fs.edit], produces: [security.md], commit: "security-fix: {ticket_key}"}
+  - {id: publish, role: reporter, tools: [fs.read, fs.write, runtime.screenshot], produces: [pr.md, ticket_comment.md]}
+on_question: pause_and_relay
+on_defer: spawn_fixer

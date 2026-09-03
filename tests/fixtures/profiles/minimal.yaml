@@ -1,0 +1,18 @@
+name: minimal
+version: 1
+source: {type: file}
+sink: {type: file}
+repo: {type: git_local, path: "."}
+model:
+  default: main
+  providers:
+    main: {type: anthropic, model: claude-opus-5}
+executor:
+  default: inline
+  kinds:
+    inline: {type: api, model: main}
+runtime:
+  type: local_shell
+  screenshot_on: [verify]
+gates:
+  max_clarify_rounds: 2
