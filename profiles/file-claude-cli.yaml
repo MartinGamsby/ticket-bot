@@ -1,0 +1,56 @@
+# The zero-key local profile: text or a file in, runs/<id>/ out, driven by the
+# `claude` CLI you are already signed in to.
+#
+# Nothing here needs an API key. `claude -p` authenticates ITSELF, out of its own
+# credential store (the OAuth profile under your home directory, or the OS
+# keyring), which `ProcessExecutor.DEFAULT_PASSTHROUGH` can already reach. If
+# `claude` works in your terminal, this profile works.
+#
+#   uv run ticketbot run -c profiles/file-claude-cli.yaml \
+#       --input-text "Add a /health endpoint" --repo /path/to/scratch-repo
+#
+# Compare with file-text-none.yaml, which is the same loop driven through the
+# Anthropic API instead (`executor: api`) and therefore DOES need
+# ANTHROPIC_API_KEY. Same pipeline, same adapters, one field different — that is
+# the "swap the AI without touching code" claim, made concrete.
+#
+# `model:` is still inherited from _base.yaml and still names Anthropic providers,
+# but with a `process` executor NOTHING constructs them: the model slots are only
+# resolved by the `api` executor's own tool loop. They stay in the profile so a
+# single step can be flipped back to `executor: inline` without redeclaring a
+# provider. The banner reports the executor that actually ran.
+extends: _base.yaml
+name: file-claude-cli
+
+source: {type: file, glob: "inbox/*.md", processed_dir: "inbox/processed"}
+sink:   {type: file}
+runtime: {type: none}
+
+# Cuts an `agent/...` branch and a worktree under `.ticketbot-worktrees/` in the
+# repo you are standing in. Pass `--repo /path/to/scratch` to point it elsewhere;
+# that override wins over this path.
+repo:   {type: git_local, path: ".", branch_template: "agent/{ticket_key}-{slug}"}
+
+executor:
+  default: claude-cli
+  kinds:
+    # The CLI and its flags are the harness's contract, not the Anthropic API's —
+    # which is exactly why they live here in YAML. Swapping `claude` for `codex
+    # exec`, `aider`, or anything else that reads a prompt on stdin and edits the
+    # working tree is a config edit, never a code change.
+    #
+    # The two names below are forwarded only for the cases the CLI's own store
+    # cannot cover, and only when actually set in the parent environment (an unset
+    # name is skipped, never an error):
+    #   ANTHROPIC_API_KEY  headless/CI, where there is no interactive login
+    #   CLAUDE_CONFIG_DIR  a relocated credential store
+    # Nothing else from this process's environment reaches the child. Do NOT move
+    # the key to `env: {ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"}` — `${ENV}` refs
+    # are expanded strictly, so that spelling makes the profile FAIL on every
+    # machine that authenticates by OAuth instead of by key.
+    claude-cli:
+      type: process
+      cmd: ["claude", "-p"]
+      prompt: stdin
+      timeout_s: 1800
+      env_passthrough: [ANTHROPIC_API_KEY, CLAUDE_CONFIG_DIR]

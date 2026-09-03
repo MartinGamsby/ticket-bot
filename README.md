@@ -112,13 +112,34 @@ uv run ticketbot validate -c profiles/file-text-none.yaml
 uv run ticketbot config banner profiles/file-text-none.yaml
 ```
 
-`run` **does need `ANTHROPIC_API_KEY`.** This profile's executor is `api`, so the
-steps are driven by the Anthropic API — "offline" here means no ticket tracker and
-no cloud runtime, not no model. Put the key in `.env` (above) or export it, then:
+`run` needs a way to reach a model. There are two, and **only one of them needs an
+API key**:
+
+**No key — drive the `claude` CLI you already signed in to** (`profiles/file-claude-cli.yaml`,
+`executor: process`). `claude -p` authenticates itself from its own credential
+store, so nothing needs to be in your environment. If `claude` works in your
+terminal, this works:
+
+```bash
+uv run ticketbot run -c profiles/file-claude-cli.yaml --input-text "Add a /health endpoint"
+```
+
+If it reports `Not logged in · Please run /login`, that is the CLI, not ticketbot —
+run `claude`, `/login` once, and try again. Swap `cmd: ["claude", "-p"]` for
+`codex exec`, `aider`, or anything else that reads a prompt on stdin and edits the
+working tree; that is a config edit, not a code change.
+
+**With a key — drive the Anthropic API directly** (`profiles/file-text-none.yaml`,
+`executor: api`, ticketbot's own path-jailed tool loop). Needs
+`ANTHROPIC_API_KEY` in `.env` or the environment:
 
 ```bash
 uv run ticketbot run -c profiles/file-text-none.yaml --input-text "Add a /health endpoint"
 ```
+
+The two profiles are otherwise identical — same pipeline, same adapters, one field
+different. That is the "swap which AI does the work without touching code" claim,
+made concrete.
 
 (Drop the `uv run ` prefix once you've activated the venv — see [Install](#install).)
 

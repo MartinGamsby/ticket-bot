@@ -3,6 +3,26 @@
 A profile is one YAML file, loaded by `ticketbot/config/loader.py` and validated into
 `ticketbot/config/schema.py: Profile` (pydantic v2, `extra="forbid"` at the top level).
 
+## The two ways to reach a model
+
+A profile drives a model through ONE of two executors, and this is the swap the
+project exists to demonstrate:
+
+| Profile | `executor` | Credentials |
+|---|---|---|
+| `file-claude-cli.yaml` | `process`, `cmd: ["claude", "-p"]` | none - the CLI authenticates itself from its own store |
+| `file-text-none.yaml` | `api` (ticketbot's own tool loop) | `ANTHROPIC_API_KEY` |
+
+They are otherwise identical. With a `process` executor the `model:` slots are
+never constructed at all -- only the `api` executor's tool loop resolves them --
+so the inherited Anthropic providers in `_base.yaml` cost nothing and are kept so a
+single step can be flipped back to `executor: inline` without redeclaring one.
+
+`env_passthrough:` (not `env:`) is how a profile forwards a key to a spawned CLI: an
+unset name in `env_passthrough` is skipped, whereas an `env:` `${ENV}` ref is
+expanded strictly and would fail the run on every machine that authenticates by
+OAuth rather than by key.
+
 ## Shape
 
 ```yaml

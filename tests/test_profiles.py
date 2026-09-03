@@ -238,3 +238,30 @@ def test_selector_end_to_end_picks_the_right_builtin_pipeline(points, issue_type
     item = WorkItem(id="x", title="Some ticket", story_points=points, issue_type=issue_type)
     selection = select(profile, item)
     assert selection.ref == expected_ref
+
+
+def test_the_claude_cli_profile_drives_a_process_executor_not_the_api():
+    """The zero-key local path: `claude -p` authenticates itself, so this profile
+    must never resolve a model provider (which would demand ANTHROPIC_API_KEY)."""
+    profile = load_profile(PROFILES_DIR / "file-claude-cli.yaml")
+
+    kind = profile.executor.kinds[profile.executor.default]
+
+    assert profile.executor.default == "claude-cli"
+    assert kind.type == "process"
+    assert kind.opt("cmd")[0] == "claude"
+    # The key may be FORWARDED when set (headless/CI), but must not be REQUIRED:
+    # `env_passthrough` skips an unset name, whereas an `env:` `${ENV}` ref would
+    # be expanded strictly and fail on every OAuth-authenticated machine.
+    assert "ANTHROPIC_API_KEY" in (kind.opt("env_passthrough") or [])
+    assert kind.opt("env") in (None, {})
+
+
+def test_the_claude_cli_profile_loads_with_no_environment_at_all(monkeypatch):
+    for name in ("ANTHROPIC_API_KEY", "JIRA_API_TOKEN", "GITHUB_TOKEN", "SOLARI_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+
+    profile = load_profile(PROFILES_DIR / "file-claude-cli.yaml")
+
+    assert profile.name == "file-claude-cli"
+    assert profile.runtime.type == "none"
