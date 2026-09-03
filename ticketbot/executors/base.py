@@ -37,6 +37,13 @@ class ExecRequest:
     # -- without it `source.read`, the ONLY tool `intake` is granted in every
     # built-in pipeline, hands the ingest role an empty string.
     work_item_text: str = ""
+    # What the pipeline step declares under `produces:` (e.g. ["plan.md",
+    # "sections/"]). The engine warns when a declared artifact is missing after a
+    # step, and `implement` hard-fails when the planner left no `sections/*.md`.
+    # `process`/`api` ignore this -- their agent is told what to write in the role
+    # prompt -- but `StubExecutor` needs it to satisfy those contracts without
+    # hardcoding pipeline knowledge into an executor.
+    produces: list[str] = field(default_factory=list)
 
 
 @dataclass

@@ -880,6 +880,7 @@ class Orchestrator:
                 workspace=workspace,
                 artifacts_dir=run_dir,
                 tools=list(step.tools),
+                produces=list(step.produces),
                 timeout_s=timeout,
                 max_cost_usd=max_cost,
                 step_id=step.id,
@@ -1089,6 +1090,7 @@ class Orchestrator:
         req = ExecRequest(
             system=system, prompt=prompt, workspace=workspace, artifacts_dir=run_dir,
             tools=list(step.tools), timeout_s=step.timeout_s or 900,
+            produces=list(step.produces),
             step_id=fixer_step.id, log_path=run_dir / "logs" / f"{fixer_step.id}.log",
             work_item_text=_work_item_text(item),
         )

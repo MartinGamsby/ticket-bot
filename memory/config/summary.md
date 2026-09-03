@@ -3,13 +3,14 @@
 A profile is one YAML file, loaded by `ticketbot/config/loader.py` and validated into
 `ticketbot/config/schema.py: Profile` (pydantic v2, `extra="forbid"` at the top level).
 
-## The two ways to reach a model
+## The three ways to reach a model
 
 A profile drives a model through ONE of two executors, and this is the swap the
 project exists to demonstrate:
 
 | Profile | `executor` | Credentials |
 |---|---|---|
+| `file-stub-offline.yaml` | `stub` | none - calls nothing at all |
 | `file-claude-cli.yaml` | `process`, `cmd: ["claude", "-p"]` | none - the CLI authenticates itself from its own store |
 | `file-text-none.yaml` | `api` (ticketbot's own tool loop) | `ANTHROPIC_API_KEY` |
 

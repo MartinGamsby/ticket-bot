@@ -23,7 +23,7 @@ configured source from the command line.)
 | `source` | `file`, `jira` | you move from ad-hoc/local tickets to a real Jira project (or back, for a demo). |
 | `sink` | `file`, `jira`, `github_pr` | you want results as local files, a Jira comment, a GitHub PR, or several at once (`also:`). |
 | `model` | `anthropic`, `openai_compat`, `fake` | you switch model vendors, or want a cheaper/different model for one role (`model: cheap` on a step). `fake` replays a scripted list of turns and exists so the suite can drive the engine with no vendor at all. |
-| `executor` | `process`, `api` | you want to drive a coding CLI you already trust (`claude -p`, `codex exec`, `aider`) vs. ticketbot's own path-jailed tool loop. |
+| `executor` | `process`, `api`, `stub` | you want to drive a coding CLI you already trust (`claude -p`, `codex exec`, `aider`), ticketbot's own path-jailed tool loop, or nothing at all (`stub` runs the pipeline with no model, for offline testing). |
 | `runtime` | `none`, `local_shell`, `solari` | you need code to run and screenshots to come from somewhere other than the machine ticketbot is on. A runtime with no command surface (`none`, and `solari` in `mode: desktop`/`browser`) leaves `shell.run` running locally rather than failing it. |
 | `repo` | `git_local`, `github` | you're iterating locally in a worktree vs. pushing branches and opening PRs on GitHub. |
 
@@ -112,8 +112,31 @@ uv run ticketbot validate -c profiles/file-text-none.yaml
 uv run ticketbot config banner profiles/file-text-none.yaml
 ```
 
-`run` needs a way to reach a model. There are two, and **only one of them needs an
-API key**:
+`run` needs a way to reach a model — or not, if you just want to watch the
+pipeline work. There are three options:
+
+**Nothing at all — the stub executor** (`profiles/file-stub-offline.yaml`,
+`executor: stub`). No model, no network, no CLI, no credentials. Every step reports
+that it did nothing, echoes back the prompt that role *would* have been given, and
+writes placeholder content for whatever it declares under `produces:`. You get a
+complete, correctly-shaped `runs/<id>/` tree whose contents are all obviously fake:
+
+```bash
+uv run ticketbot run -c profiles/file-stub-offline.yaml --input-text "Add a /health endpoint" --repo /path/to/scratch
+```
+
+Use it to exercise or debug the *pipeline* rather than the agents — step ordering,
+`when:` gating, `for_each` fan-out, the gates, the run store, the banner, the
+reporting contract. Reading each step's echoed prompt is the fastest way to see
+what a role actually gets asked, with the work item and context paths already
+substituted in.
+
+A successful stub run ends **`blocked`, exit code 3** — `gates.on_pr_ready:
+human_review` holds it at the PR-ready gate, which is the designed terminal state,
+not a failure. `question.md` says so: *"The pull request is ready and awaiting
+human review."*
+
+The other two options actually think, and **only one needs an API key**:
 
 **No key — drive the `claude` CLI you already signed in to** (`profiles/file-claude-cli.yaml`,
 `executor: process`). `claude -p` authenticates itself from its own credential

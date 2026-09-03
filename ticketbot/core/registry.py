@@ -90,3 +90,4 @@ MODELS.register("openai_compat", "ticketbot.models.openai_compat:OpenAICompatPro
 MODELS.register("fake", "ticketbot.models.fake:FakeModelProvider")
 EXECUTORS.register("process", "ticketbot.executors.process:ProcessExecutor")
 EXECUTORS.register("api", "ticketbot.executors.api_loop:ApiLoopExecutor")
+EXECUTORS.register("stub", "ticketbot.executors.stub:StubExecutor")

@@ -13,6 +13,38 @@ config edit and the engine notices nothing.
 | `files_written` | `diff_snapshots(workspace)` | `diff_snapshots(workspace)` plus workspace-only tool writes |
 | `describe()` | `process: claude -p` | `api: Claude Opus 5 (claude-opus-5) effort=xhigh` |
 
+## `stub` - the genuinely offline executor
+
+`executors/stub.py`, registered as `stub`, used by `profiles/file-stub-offline.yaml`.
+Calls nothing: no model, no network, no subprocess. Each step reports that it did
+nothing, echoes the prompt it received, and writes placeholder content for every
+entry in `ExecRequest.produces`.
+
+`produces` is on `ExecRequest` FOR this executor -- `process` and `api` ignore it,
+because their agent is told what to write in the role prompt. The stub needs it to
+satisfy the engine's contracts from config rather than by hardcoding step ids.
+
+Three traps, each found by running the pipeline rather than reasoning about it, each
+pinned by a test in `tests/test_executor_stub.py`:
+
+- **Never build the result with `finish_result()`.** It parses `QUESTION:`/`DEFER:`
+  out of the text, and the echoed prompt CONTAINS both markers - every role prompt
+  carries the "end your turn with QUESTION:" protocol. Doing so made the stub raise
+  a question it never asked and block the run. It returns `question=None, defers=[]`.
+- **`files_written` must stay empty.** It means WORKSPACE files, and the landing
+  check fails a step whose declared paths sit outside the workspace; the stub writes
+  only run-dir artifacts. Reporting them made `verify` kill its own run - the same
+  failure a captured screenshot once caused.
+- **The intake JSON fence must precede the prompt echo.** `_extract_json_block()`
+  takes the FIRST fenced block, and role prompts contain fenced examples of their own.
+
+It also writes `Security: no` into `plan.md` (the gate fails closed, so silence
+would RUN the security step) and fills `acceptance` in the intake JSON with
+`ambiguity: low`, so `clarify` is skipped and a stub run takes the full happy path.
+
+A successful stub run ends `blocked` / exit 3 at `gates.on_pr_ready: human_review`.
+That is the designed terminal state, not a failure.
+
 ## `ProcessExecutor` — `executors/process.py`
 
 Config: `cmd` (a non-empty LIST of strings — never a shell string, never `shlex.split`), `prompt`

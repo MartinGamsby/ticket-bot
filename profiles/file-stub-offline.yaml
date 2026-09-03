@@ -1,0 +1,53 @@
+# The genuinely offline profile: no model, no network, no CLI, no credentials.
+#
+# Every step runs through `StubExecutor`, which calls nothing. Each one reports
+# that it did nothing, echoes back the prompt that role WOULD have been given, and
+# writes placeholder content for whatever the step declares under `produces:`. The
+# result is a complete, correctly-shaped runs/<id>/ tree whose contents are all
+# obviously fake.
+#
+#   uv run ticketbot run -c profiles/file-stub-offline.yaml \
+#       --input-text "Add a /health endpoint" --repo /path/to/scratch
+#
+# Use it to exercise or debug the PIPELINE rather than the agents: step ordering,
+# `when:` gating, `for_each` fan-out, the gates, the run store, the banner, the
+# per-section commits, the reporting contract. Nothing here can fail because a
+# model was slow, rate-limited, unauthenticated, or having an off day.
+#
+# The other two file profiles are the same loop with a real engine behind it:
+#   file-claude-cli.yaml  spawns `claude -p`      (no API key; the CLI logs in itself)
+#   file-text-none.yaml   drives the Anthropic API (needs ANTHROPIC_API_KEY)
+# Same pipeline, same adapters, one field different.
+#
+# `model:` is still inherited from _base.yaml but NOTHING constructs it: model slots
+# are resolved only by the `api` executor's tool loop. That is why this profile needs
+# no key despite naming Anthropic providers upstream.
+extends: _base.yaml
+name: file-stub-offline
+
+source: {type: file, glob: "inbox/*.md", processed_dir: "inbox/processed"}
+sink:   {type: file}
+runtime: {type: none}
+
+# Cuts an `agent/...` branch and a worktree under `.ticketbot-worktrees/` in the repo
+# you are standing in. Pass `--repo /path/to/scratch` to point it elsewhere.
+repo:   {type: git_local, path: ".", branch_template: "agent/{ticket_key}-{slug}"}
+
+executor:
+  default: stub
+  kinds:
+    stub:
+      type: stub
+      # How many section-N.md the planner step emits. 2 exercises the `implement`
+      # fan-out properly -- with 1 you never see the sequential multi-section path,
+      # which is where per-step commit behaviour actually shows up.
+      sections: 2
+      # Echo each role's prompt into its step summary. This is most of the value of
+      # a stub run: you can read exactly what every role would have been asked,
+      # with the real work item and context paths already substituted in.
+      echo_prompt: true
+      echo_limit: 2000
+
+# A stub run costs nothing and cannot hang on a model, but the caps stay meaningful
+# as a guard against a pipeline that loops.
+budget: {max_cost_usd: 0, max_wall_clock_s: 300}
