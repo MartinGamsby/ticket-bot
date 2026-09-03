@@ -29,11 +29,30 @@ configured source from the command line.)
 
 ## Install
 
+Requires Python 3.11+. From the repo root:
+
 ```bash
 uv venv
 uv pip install -e ".[dev]"      # pytest, pytest-cov
 uv pip install -e ".[solari]"   # only if runtime.type: solari — pulls the 3 Solari SDKs
 ```
+
+That installs the `ticketbot` command **into `.venv`**, not onto your PATH. Every
+`ticketbot ...` example below therefore assumes one of these:
+
+```bash
+uv run ticketbot --help                    # no activation needed — simplest
+```
+
+```bash
+.venv\Scripts\activate                     # Windows; then plain `ticketbot ...` works
+source .venv/bin/activate                  # macOS / Linux
+```
+
+If `ticketbot` reports *"not recognized as an internal or external command"*, the
+venv isn't active — use `uv run`, or activate it. Check you're in the right place
+with `ls pyproject.toml profiles/`; if those are missing you're not at the repo root
+(or you're on a branch that predates the orchestrator).
 
 Secrets are never typed into a profile as literal values — every credential is an
 `${ENV_VAR}` reference, expanded only at the moment an adapter actually needs it
@@ -82,16 +101,43 @@ environment variables.
 
 ## Quickstart, fully offline
 
-No API key, no network, no real coding CLI — `profiles/file-text-none.yaml` uses
-`source: file`, `sink: file`, `repo: git_local`, `runtime: none`, and its `${ENV}`
-refs (for the default Anthropic model) are only touched once a step actually runs.
+`profiles/file-text-none.yaml` uses `source: file`, `sink: file`, `repo: git_local`,
+`runtime: none` — no Jira, no Solari, no GitHub, no real coding CLI.
+
+`validate` and `config banner` need **no environment at all**, because `${ENV}` refs
+are never expanded just to load a profile:
 
 ```bash
-ticketbot validate -c profiles/file-text-none.yaml
-ticketbot run -c profiles/file-text-none.yaml --input-text "Add a /health endpoint"
+uv run ticketbot validate -c profiles/file-text-none.yaml
+uv run ticketbot config banner profiles/file-text-none.yaml
 ```
 
-That produces a `runs/<id>/` directory:
+`run` **does need `ANTHROPIC_API_KEY`.** This profile's executor is `api`, so the
+steps are driven by the Anthropic API — "offline" here means no ticket tracker and
+no cloud runtime, not no model. Put the key in `.env` (above) or export it, then:
+
+```bash
+uv run ticketbot run -c profiles/file-text-none.yaml --input-text "Add a /health endpoint"
+```
+
+(Drop the `uv run ` prefix once you've activated the venv — see [Install](#install).)
+
+Two things worth knowing before the first run:
+
+- **It operates on the repo you are standing in.** `file-text-none.yaml` sets
+  `repo: {path: "."}`, so ticketbot cuts an `agent/...` branch and a worktree under
+  `.ticketbot-worktrees/` in *this* repo. To try it against a throwaway repo
+  instead, pass `--repo /path/to/scratch`.
+- **Run artifacts land next to the profile**, i.e. `profiles/runs/<id>/`, because
+  `runs_dir` resolves against the profile's own directory exactly as `repo.path`
+  does. Pass `--runs-dir runs` (or set `runs_dir:` in the profile) to put them at
+  the repo root.
+
+If you interrupt a run with Ctrl+C, the worktree and branch it took are left
+behind on purpose — the next run of the same item prunes stale records and reuses
+them, so you can just run it again, or `uv run ticketbot resume <run-id>`.
+
+That produces a run directory:
 
 ```
 runs/2026-09-01-1443-add-a-health-endpoint-a3f9/

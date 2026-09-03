@@ -19,6 +19,7 @@ from .config.loader import ConfigError, load_profile, load_profile_dict, resolve
 from .config.redact import redact
 from .core.banner import facts_from_profile, render_banner
 from .core.run import Run, RunStatus, RunStore
+from .adapters.repos.base import RepoError
 from .engine.locks import LockHeld
 from .engine.orchestrator import Orchestrator, resolve_runs_dir
 
@@ -130,6 +131,19 @@ def _cmd_config_init(args: argparse.Namespace) -> int:
     return 0
 
 
+def _interrupted() -> int:
+    """Ctrl+C: report it as an interrupt, not a crash.
+
+    A run killed mid-step leaves its worktree and branch behind. That is recovered
+    automatically -- `GitLocalRepo.checkout()` prunes stale records and reuses a
+    worktree an earlier run of the same branch left -- so the next invocation picks
+    up rather than failing on "already checked out". 130 is the conventional
+    128+SIGINT exit code.
+    """
+    print(chr(10) + "interrupted", file=sys.stderr)
+    return 130
+
+
 def _run_exit_code(run: Run) -> int:
     if run.status == RunStatus.DONE:
         return _EXIT_OK
@@ -187,6 +201,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
     except (ConfigError, ValidationError) as e:
         _print_load_error("run failed", e)
         return _EXIT_CONFIG_ERROR
+    except RepoError as e:
+        print(f"error: {redact(str(e))}", file=sys.stderr)
+        return _EXIT_FAILED
+    except KeyboardInterrupt:
+        return _interrupted()
 
     _print_run_result(run, orchestrator.store.dir(run.id))
     return _run_exit_code(run)

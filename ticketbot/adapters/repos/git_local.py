@@ -37,6 +37,25 @@ _BRANCH_MAX_LEN = 100
 _MAX_DIFF_CHARS = 400_000
 
 
+def _parse_worktree_list(stdout: str) -> dict[str, Path]:
+    """`git worktree list --porcelain` -> {branch ref: worktree path}.
+
+    The porcelain format is blank-line-separated records of `worktree <path>` /
+    `HEAD <sha>` / `branch <ref>`; a detached worktree has no `branch` line and is
+    skipped. Parsed rather than eyeballed because the human format aligns columns
+    with spaces that a Windows path happily contains.
+    """
+    found: dict[str, Path] = {}
+    current: Path | None = None
+    for line in stdout.splitlines():
+        if line.startswith("worktree "):
+            current = Path(line[len("worktree ") :].strip())
+        elif line.startswith("branch ") and current is not None:
+            found[line[len("branch ") :].strip()] = current
+            current = None
+    return found
+
+
 def _sanitize_branch(rendered: str) -> str:
     """lowercase, spaces -> '-', strip `~^:?*[\\`, collapse '..' and '@{' sequences,
     collapse repeated '/', strip leading/trailing '/' or '-', cap at 100 chars, and
@@ -53,6 +72,11 @@ def _sanitize_branch(rendered: str) -> str:
     while "@{" in s:
         s = s.replace("@{", "-")
     s = re.sub(r"/+", "/", s)
+    # Collapse the separator runs an empty template slot leaves behind, so
+    # `agent/{ticket_key}-{slug}` with no ticket key yields "agent/slug", not
+    # "agent/-slug". Done before the strip so interior cases are covered too.
+    s = re.sub(r"-{2,}", "-", s)
+    s = s.replace("/-", "/").replace("-/", "/")
     s = s.strip("/-")
     if len(s) > _BRANCH_MAX_LEN:
         s = s[:_BRANCH_MAX_LEN].strip("/-")
@@ -111,9 +135,19 @@ class GitLocalRepo:
     # ------------------------------------------------------------------ #
 
     def branch_name(self, item: WorkItem) -> str:
+        slug = item.slug()
+        key = item.key
+
+        # A file/text work item has no ticket key -- `key` IS the slug -- so the
+        # default `{ticket_key}-{slug}` template would render the same words twice
+        # ("agent/add-a-health-endpoint-add-a-health-endpoint"). A Jira item, whose
+        # key is "ENG-1842", is unaffected.
+        if _sanitize_branch(key) == slug:
+            key = ""
+
         rendered = render(
             self.branch_template,
-            {"ticket_key": item.key, "slug": item.slug(), "issue_type": item.issue_type.lower()},
+            {"ticket_key": key, "slug": slug, "issue_type": item.issue_type.lower()},
         )
         return _sanitize_branch(rendered)
 
@@ -178,14 +212,28 @@ class GitLocalRepo:
             raise RepoError(f"unknown isolation mode: {self.isolation!r}")
 
         base = self.base_branch or self._rev_parse(self.path, "HEAD")
-        wt_name = f"{branch.replace('/', '-')}-{token_hex(2)}"
-        wt = self.worktrees_dir / wt_name
-        wt.parent.mkdir(parents=True, exist_ok=True)
 
-        if self._branch_exists(branch):
-            run_git(["worktree", "add", str(wt), branch], cwd=self.path)
+        # Drop records for worktrees whose directory is already gone (deleted by
+        # hand, or by a cleanup that did not reach `git worktree remove`). Without
+        # this, git still considers the branch checked out and `worktree add`
+        # fails -- the exact wall an interrupted run leaves behind.
+        run_git(["worktree", "prune"], cwd=self.path, check=False)
+
+        existing = self._worktree_for_branch(branch)
+        if existing is not None:
+            # A previous run for this SAME work item was interrupted after taking
+            # the worktree. Reuse it rather than failing: the branch and the item
+            # are the same, and one-item-one-run is already enforced by the lock.
+            logger.info("reusing worktree %s left by an earlier run of %s", existing, branch)
+            wt = existing
         else:
-            run_git(["worktree", "add", str(wt), "-b", branch, base], cwd=self.path)
+            wt_name = f"{branch.replace('/', '-')}-{token_hex(2)}"
+            wt = self.worktrees_dir / wt_name
+            wt.parent.mkdir(parents=True, exist_ok=True)
+            if self._branch_exists(branch):
+                run_git(["worktree", "add", str(wt), branch], cwd=self.path)
+            else:
+                run_git(["worktree", "add", str(wt), "-b", branch, base], cwd=self.path)
 
         # Set identity LOCALLY in the worktree so commits never depend on the
         # developer's / CI runner's global git config.
@@ -199,6 +247,23 @@ class GitLocalRepo:
         # is part of the baseline and can never be reported as drift.
         self._parent_baseline = self._parent_porcelain()
         return self._workspace
+
+    def _worktree_for_branch(self, branch: str) -> Path | None:
+        """The existing worktree holding `branch`, if its directory is still there.
+
+        Called after `worktree prune`, so a record pointing at a deleted directory
+        is already gone; the `is_dir()` check covers the race where it vanishes in
+        between. Returns None for the common case of a branch checked out nowhere.
+        """
+        result = run_git(["worktree", "list", "--porcelain"], cwd=self.path, check=False)
+        if result.returncode != 0:
+            return None
+        path = _parse_worktree_list(result.stdout).get(f"refs/heads/{branch}")
+        if path is None or not path.is_dir():
+            return None
+        if path.resolve() == self.path.resolve():
+            return None  # the main clone itself; `worktree add` is still correct
+        return path
 
     # ------------------------------------------------------------------ #
     # status / diff

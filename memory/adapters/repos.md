@@ -2,6 +2,26 @@
 
 The git host. `git_local` works in a worktree of a local clone; `github` adds clone, push and PR.
 
+## Interrupted runs recover themselves
+
+`checkout()` runs `git worktree prune` first, then looks for an existing worktree
+holding the branch (`_worktree_for_branch()`, parsing `git worktree list --porcelain`
+-- parsed, not eyeballed, because the human format aligns columns with spaces that a
+Windows path contains). If one is there and its directory still exists, it is REUSED;
+if the record is stale the prune already removed it and a fresh worktree is created.
+
+This is what makes a Ctrl+C'd run recoverable: the branch stays checked out in an
+abandoned worktree, and without the prune-and-reuse the next run dies with
+`fatal: '<branch>' is already checked out at ...`. The main clone is explicitly
+excluded from reuse, so the default-branch guard still fires.
+
+`branch_name()` blanks `{ticket_key}` when the slugified key equals the slug, which
+is always true for a file/text item (its `key` falls back to `id`, which IS the
+slug). Without it the default `agent/{ticket_key}-{slug}` template renders the same
+words twice. `_sanitize_branch()` then collapses the separator run the empty slot
+leaves behind.
+
+
 ## `run_git` — the single git choke point
 
 `adapters/repos/base.py: run_git(args, *, cwd, timeout=120, check=True)` is
