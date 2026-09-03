@@ -15,7 +15,7 @@ memory/
   config/             profiles, inheritance, secrets
   pipelines/          step YAML, selection, predicates, role prompts
   engine/             the run loop, run dir, gates/locks/budget, reporting
-  executors/          process vs api, the path jail, the tool catalogue
+  executors/          process vs api vs stub, the path jail, the tool catalogue
   models/             the ModelProvider layer
   adapters/           sources, sinks, repos, runtimes
   testing/            test conventions and the fakes
@@ -69,7 +69,7 @@ memory/
 
 | File | Topic |
 |---|---|
-| [executors/summary.md](executors/summary.md) | `process` vs `api`, and the `files_written` contract |
+| [executors/summary.md](executors/summary.md) | `process` vs `api` vs `stub`, `uses_model_slots`, the `files_written` contract |
 | [executors/path-jail.md](executors/path-jail.md) | `jail()`, the two permitted roots, and why the run dir is one |
 | [executors/tools.md](executors/tools.md) | the tool catalogue, the allowlist, `shell.run` and the runtime |
 

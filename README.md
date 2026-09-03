@@ -16,6 +16,82 @@ protocol modules alone. (One deliberate exception: the orchestrator imports
 `FileSource` directly, so `--input-text`/`--input` can override the profile's
 configured source from the command line.)
 
+## Why this exists
+
+Most "AI does your tickets" tools are one vendor end to end: their model, their
+agent harness, their runner, their idea of what a pipeline is. That is fine until
+you want something they did not plan for — and the useful things are all in that
+category.
+
+ticketbot is built so **every one of those choices is a line of YAML**, because the
+interesting configurations need them to be:
+
+- **Have two vendors review each other.** The `review` step names a `peer` model
+  slot; point it at a different company than the one that wrote the code. A
+  reviewer that is the same model as the author agrees with itself far too often.
+  Adding a third opinion, or a step where they argue, is a pipeline edit.
+- **Run a local LLM for the cheap roles.** `ingest` and `clarify` do not need a
+  frontier model. Point them at Ollama, vLLM, llama.cpp — anything speaking
+  `/chat/completions` — through `openai_compat`, and keep the expensive model for
+  `plan` and `implement`.
+- **Bring the coding agent you already trust.** `claude -p`, `codex exec`, `aider`
+  — the `process` executor spawns whatever reads a prompt on stdin and edits the
+  working tree. Its flags are config, not code.
+- **Route by size.** A 1-point bug and a 13-point feature get different pipelines,
+  chosen by rules on story points and issue type.
+- **Swap the tracker.** Jira today, a markdown file on your laptop tomorrow, and
+  the pipeline does not know the difference.
+
+No adapter is privileged. The engine imports no vendor SDK at all — every piece is
+resolved by name at run time, so "use a different X" never means "patch the engine".
+
+```mermaid
+flowchart TB
+    S["<b>source</b><br/>file · text · jira"]
+    ENG["<b>Orchestrator</b><br/>picks the pipeline · runs the steps<br/>gates · run store · banner"]
+
+    subgraph PIPE["pipeline — YAML, selected per work item"]
+        direction LR
+        A["ingest"] --> B["clarify"] --> C["plan"] --> D["implement"]
+        D --> E["verify"] --> F["review"] --> G["security"] --> H["publish"]
+    end
+
+    subgraph X["executor — who thinks, per step"]
+        direction TB
+        X1["stub<br/><i>nothing at all</i>"]
+        X2["process<br/><i>claude -p · codex · aider</i>"]
+        X3["api<br/><i>built-in tool loop</i>"]
+    end
+
+    subgraph M["model — any vendor, per role"]
+        direction TB
+        M1["anthropic"]
+        M2["openai_compat<br/><i>OpenAI · vLLM · Ollama · local</i>"]
+    end
+
+    subgraph RT["runtime — where code runs"]
+        direction TB
+        R1["none · local_shell"]
+        R2["solari<br/><i>sandbox · browser · desktop</i>"]
+    end
+
+    subgraph OUT["sink + repo — where results go"]
+        direction TB
+        O1["runs/RUN-ID/ artifacts"]
+        O2["jira comment + transition"]
+        O3["github pull request"]
+    end
+
+    S --> ENG
+    ENG --> PIPE
+    PIPE -- "every step" --> X
+    X3 -- "resolves a model slot" --> M
+    PIPE -- "shell + screenshots" --> RT
+    PIPE --> OUT
+```
+
+Each labelled box is one `type:` field. Nothing above is wired in code.
+
 ## The swap points
 
 | Point | Kinds | Change it when… |
