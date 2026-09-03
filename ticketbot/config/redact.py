@@ -22,6 +22,21 @@ PATTERNS: list[tuple[str, re.Pattern[str]]] = [
 
 _MIN_SECRET_LEN = 8
 
+# A variable whose NAME reads like a credential. Used wherever a name/value pair
+# crosses into somewhere its value could be echoed back -- a spawned CLI's
+# environment (`executors.process`) and a loaded `.env` (`config.dotenv`) -- to
+# decide whether to `register_secret()` the value.
+#
+# Matched on the NAME, never the value: a path or URL carried as `CLAUDE_CONFIG_DIR`
+# or `MODEL_BASE_URL` must not become a redaction pattern applied to every line in
+# the process, which would mangle ordinary output that happens to contain it.
+_SECRET_NAME_RE = re.compile(r"(?i)(?:^|_)(KEY|TOKEN|SECRET|PASSWORD|CREDENTIALS?)(?:_|$)")
+
+
+def is_secret_name(name: str) -> bool:
+    """True if `name` reads like a credential (`*_KEY`, `*_TOKEN`, `*_SECRET`, ...)."""
+    return bool(_SECRET_NAME_RE.search(name))
+
 
 class Redactor:
     """Pattern-based scrubbing plus explicitly registered literal secret values."""

@@ -15,9 +15,9 @@ import pytest
 from ticketbot.config.redact import REDACTED, Redactor
 from ticketbot.config.schema import AdapterConfig
 from ticketbot.executors.base import ExecRequest, ExecutorError
+from ticketbot.config.redact import is_secret_name
 from ticketbot.executors.process import (
     DEFAULT_PASSTHROUGH,
-    _SECRET_NAME_RE,
     ProcessExecutor,
 )
 
@@ -217,7 +217,7 @@ def test_no_api_key_is_forwarded_by_default(tmp_path, monkeypatch, name):
 
 def test_default_passthrough_declares_no_credential_shaped_name():
     """A standing guard on the list itself: nothing in it may read like a secret."""
-    assert [n for n in DEFAULT_PASSTHROUGH if _SECRET_NAME_RE.search(n)] == []
+    assert [n for n in DEFAULT_PASSTHROUGH if is_secret_name(n)] == []
 
 
 def test_a_deliberately_forwarded_credential_is_scrubbed_from_the_step_log(

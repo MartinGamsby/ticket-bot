@@ -14,6 +14,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from .config.dotenv import DEFAULT_ENV_FILENAME, DotenvError, load_dotenv
 from .config.loader import ConfigError, load_profile, load_profile_dict, resolved_yaml
 from .config.redact import redact
 from .core.banner import facts_from_profile, render_banner
@@ -262,6 +263,17 @@ def _cmd_resume(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ticketbot")
+    parser.add_argument(
+        "--env-file",
+        default=None,
+        metavar="PATH",
+        help=f"load environment variables from PATH (default: ./{DEFAULT_ENV_FILENAME} if present)",
+    )
+    parser.add_argument(
+        "--no-env-file",
+        action="store_true",
+        help="do not load a .env file at all",
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_validate = sub.add_parser("validate", help="load and validate a profile")
@@ -319,9 +331,37 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _apply_env_file(args: argparse.Namespace) -> int | None:
+    """Load `.env` into the environment before any command runs, so a profile's
+    `${ENV}` refs resolve. Returns an exit code only on failure.
+
+    An explicit `--env-file` that does not exist is an error: the user named a file
+    and silently ignoring it would leave a run failing later with a confusing
+    "unset environment variable" instead of "that path is wrong". The implicit
+    `./.env` is optional by design and its absence is normal.
+    """
+    if args.no_env_file:
+        return None
+
+    path = Path(args.env_file) if args.env_file else None
+    if path is not None and not path.is_file():
+        print(f"error: --env-file {path} does not exist", file=sys.stderr)
+        return _EXIT_CONFIG_ERROR
+
+    try:
+        load_dotenv(path)
+    except DotenvError as e:
+        print(f"error: {redact(str(e))}", file=sys.stderr)
+        return _EXIT_CONFIG_ERROR
+    return None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    err = _apply_env_file(args)
+    if err is not None:
+        return err
     return args.func(args)
 
 

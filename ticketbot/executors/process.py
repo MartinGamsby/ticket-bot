@@ -14,14 +14,13 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
 
 from ..config.loader import expand_env
-from ..config.redact import redact, register_secret
+from ..config.redact import is_secret_name, redact, register_secret
 from ..config.schema import AdapterConfig
 from ..core.templating import render
 from .base import (
@@ -64,11 +63,9 @@ DEFAULT_PASSTHROUGH: list[str] = [
 ]
 
 # A forwarded variable whose NAME reads like a credential is registered with the
-# redactor, so the child's own stdout/stderr (appended to `runs/<id>/logs/`) can
-# never echo it back in the clear. Matched on the name, not the value: a path
-# forwarded as `CLAUDE_CONFIG_DIR` must NOT become a redaction pattern applied to
-# every log line in the process.
-_SECRET_NAME_RE = re.compile(r"(?i)(?:^|_)(KEY|TOKEN|SECRET|PASSWORD|CREDENTIALS?)(?:_|$)")
+# redactor (`is_secret_name`, shared with `config.dotenv`), so the child's own
+# stdout/stderr -- appended to `runs/<id>/logs/` -- can never echo it back in the
+# clear.
 
 _PROMPT_MODES = {"stdin", "arg", "file"}
 _TREE_KILL_GRACE_S = 5
@@ -212,7 +209,7 @@ class ProcessExecutor:
             value = os.environ.get(name)
             if value is None:
                 continue  # forwarded opportunistically; an unset name is not an error
-            if _SECRET_NAME_RE.search(name):
+            if is_secret_name(name):
                 register_secret(value)
             env[name] = value
         for key, raw_value in self.env_cfg.items():

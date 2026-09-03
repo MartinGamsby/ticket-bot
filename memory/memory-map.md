@@ -45,7 +45,7 @@ memory/
 |---|---|
 | [config/summary.md](config/summary.md) | the `Profile` schema, why it stays small, the shipped profiles |
 | [config/profile-inheritance.md](config/profile-inheritance.md) | `extends:` deep-merge and the leak it caused twice; `builtin:` refs |
-| [config/secrets-and-redaction.md](config/secrets-and-redaction.md) | `${ENV}`-only secrets, the redactor, who scrubs what |
+| [config/secrets-and-redaction.md](config/secrets-and-redaction.md) | `${ENV}`-only secrets, `.env` loading, the redactor, who scrubs what |
 
 ## pipelines/
 

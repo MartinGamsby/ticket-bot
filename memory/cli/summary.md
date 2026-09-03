@@ -4,6 +4,13 @@
 returns an int exit code; nothing calls `sys.exit()` from deep inside. Every printed error goes
 through `redact()`.
 
+## Global flags
+
+`--env-file PATH` and `--no-env-file` sit on the top-level parser, not on a subcommand, and are
+applied by `_apply_env_file()` in `main()` BEFORE dispatch — a profile's `${ENV}` refs must resolve
+for every command, including `validate`. See
+[../config/secrets-and-redaction.md](../config/secrets-and-redaction.md) for the loading rules.
+
 ## Commands
 
 | Command | Flags |

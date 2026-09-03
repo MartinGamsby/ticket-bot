@@ -17,7 +17,36 @@ Consequences that are load-bearing:
 
 Env vars the shipped profiles use: `ANTHROPIC_API_KEY`, `JIRA_EMAIL`, `JIRA_API_TOKEN`,
 `JIRA_BOT_ACCOUNT_ID`, `GITHUB_TOKEN`, `SOLARI_API_KEY`, `MODEL_BASE_URL`, `MODEL_API_KEY`,
-`PEER_BASE_URL`, `PEER_API_KEY`.
+`PEER_BASE_URL`, `PEER_API_KEY`. `.env.example` is the tracked template listing all of them.
+
+## Where the values come from — `config/dotenv.py`
+
+`expand_env()` reads `os.environ` and nothing else, so `.env` support is an explicit load step, not
+an implicit fallback. `cli.main()` calls `load_dotenv()` before dispatching any command; the global
+flags are `--env-file PATH` and `--no-env-file`.
+
+Invariants:
+
+- **The real environment wins.** A name already set (and non-empty) is skipped; `override=True`
+  exists but nothing in the CLI passes it. A stale `.env` must never shadow a CI-exported secret.
+- Values are literal text — no `$VAR` interpolation, no command substitution. A credential file that
+  can pull in arbitrary process state is a different kind of object than a list of key-value pairs.
+- `find_dotenv()` looks in the given directory only and **does not walk up**: an ancestor's `.env`
+  silently applying to a run in a subdirectory would misdirect a credential.
+- A malformed line raises `DotenvError` rather than being skipped — a typo'd credential line that
+  vanishes surfaces much later as a confusing `MissingEnvError`.
+- A missing `./.env` is normal and returns `[]`; a `--env-file` the user named but that does not
+  exist is an error.
+- `load_dotenv()` returns only the NAMES it set, so a caller can report what happened without
+  handling any value.
+- A loaded name matching `is_secret_name()` is `register_secret()`'d as it loads, so it is masked in
+  artifacts and logs even when it matches no pattern in `PATTERNS`.
+
+`is_secret_name()` lives in `config/redact.py` and is shared with
+[../executors/summary.md](../executors/summary.md)'s `ProcessExecutor` env forwarding — one
+definition, two callers. It matches on the NAME (`*_KEY`, `*_TOKEN`, `*_SECRET`, `*_PASSWORD`,
+`*_CREDENTIAL(S)`), never the value, so a `MODEL_BASE_URL` or `CLAUDE_CONFIG_DIR` does not become a
+redaction pattern applied to every line in the process.
 
 ## Redaction — `config/redact.py`
 

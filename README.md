@@ -54,6 +54,32 @@ The names above are the ones the shipped profiles happen to use; `${ANY_NAME}`
 works anywhere in a profile, because the loader never interprets the name — it
 just leaves the reference alone until an adapter expands it.
 
+### Where to put them: `.env`
+
+```bash
+cp .env.example .env      # then fill in only what your profile uses
+```
+
+Every command loads `.env` from the current directory before anything else runs,
+so the keys above resolve without exporting them by hand. `.env` is git-ignored;
+`.env.example` is the tracked template.
+
+- **A name already set in your real environment always wins.** A stale `.env` in a
+  working copy can never shadow what CI or your shell exported.
+- `--env-file PATH` loads one from somewhere else; `--no-env-file` ignores it
+  entirely. A `--env-file` you name but that doesn't exist is an error — the
+  implicit `./.env` is the only optional one.
+- Values are literal text: no `$VAR` interpolation inside the file, no command
+  substitution. `${ENV}` refs resolve in one place only, when an adapter reads them.
+- A loaded name that reads like a credential (`*_KEY`, `*_TOKEN`, `*_SECRET`, …) is
+  registered with the redactor as it loads, so its value is masked in `runs/<id>/`
+  artifacts and logs even if it matches no known token shape. Matching is on the
+  *name*, so a `MODEL_BASE_URL` never becomes a pattern that mangles ordinary output.
+
+Exporting the variables yourself works just as well — `.env` is a convenience, not
+a requirement, and nothing reads it in production if you'd rather set real
+environment variables.
+
 ## Quickstart, fully offline
 
 No API key, no network, no real coding CLI — `profiles/file-text-none.yaml` uses
