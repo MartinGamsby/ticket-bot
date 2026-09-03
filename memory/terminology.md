@@ -16,7 +16,8 @@ Domain language of `ticketbot`. One line each: term - meaning.
 - **Source** - where a work item comes from: `file`, `jira`.
 - **Sink** - where results are reported: `file`, `jira`, `github_pr` (plus `also:` fan-out).
 - **Model** / **ModelProvider** - raw completion vendor: `anthropic`, `openai_compat`, `fake`.
-- **Executor** - HOW a step's work gets done: `process` (spawn a coding CLI) or `api` (own tool loop).
+- **Executor** - HOW a step's work gets done: `process` (spawn a coding CLI), `api` (own tool loop
+  over a provider), or `stub` (call nothing at all).
 - **Runtime** - WHERE shell commands run and screenshots come from: `none`, `local_shell`, `solari`.
 - **Repo** - the git host: `git_local`, `github`.
 
@@ -39,6 +40,8 @@ Domain language of `ticketbot`. One line each: term - meaning.
 - **Budget** - cost and wall-clock caps that stop a run; not billing.
 - **Run lock** - `runs/.locks/<slug>-<digest>.lock`, keyed on the RAW item key; one work item to one run.
 - **Banner** - the "what was USED" summary printed and written to `runs/<id>/banner.txt`.
+- **`uses_model_slots`** - executor class attribute; True only for `api`. Gates the banner's
+  `models=` line, because `process` and `stub` never resolve a `model:` slot.
 - **Retire / `mark_processed`** - telling a source an item's run is terminal so polling moves on.
 - **Claim** - a source assigning the item to the bot and transitioning it; `False` means lost race.
 
@@ -64,3 +67,9 @@ See [pipelines/role-prompts.md](pipelines/role-prompts.md).
 - **Solari is not a model.** It is exactly one `runtime` adapter (cloud browsers/sandboxes/desktops).
 - **`"default"` is not a sentinel.** In a pipeline `defaults:` block it is just another slot/kind name
   to look up. Omitting the key is what triggers the profile-level fallback. See [practices.md](practices.md).
+- **`runtime` is not the executor.** The banner prints both, and they get confused: `executor=` is
+  what does a step's thinking; `runtime=` is only where shell commands run and screenshots come from.
+  `runtime=none` means "locally, no sandbox" and says nothing about whether a model was called - a
+  fully working stub run prints exactly that.
+- **`blocked` is not a failure.** A successful run that reaches `gates.on_pr_ready: human_review`
+  ends `blocked` with exit 3, holding at the PR-ready gate. Exit 4 is a failure.

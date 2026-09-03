@@ -77,3 +77,23 @@ ticketbot run -c profiles/file-text-none.yaml \
 
 Then inspect `runs/<id>/banner.txt` and `pr.md`, flip `executor.default` between `inline` and a
 `process` kind, and re-run: same artifacts, different engine, is the proof the swap works.
+
+## Exit codes
+
+| Code | Meaning |
+|---|---|
+| 0 | `done` (also `poll` with nothing to do) |
+| 2 | config/usage error — bad profile, missing `--env-file`, lock held |
+| 3 | `blocked` — including the NORMAL end of a successful run that reaches `gates.on_pr_ready: human_review` |
+| 4 | `failed` — a step errored, or a `RepoError` escaped |
+| 130 | Ctrl+C; prints `interrupted`, not a traceback. The worktree and branch it took are left behind ON PURPOSE and reused by the next run of the same item |
+
+**3 is not failure.** A stub or dry run of the standard pipeline ends here by design.
+
+## Where the output goes
+
+`run`/`poll`/`resume` print the run directory as their LAST line. Without `--runs-dir`, `runs_dir`
+resolves against the PROFILE's directory (the same rule as `repo.path`), so
+`-c profiles/x.yaml` writes `profiles/runs/<id>/` — not `runs/` at the repo root. Pass
+`--runs-dir runs` or set `runs_dir:` in the profile to change that. Each role's echoed prompt and
+returned summary is in `runs/<id>/steps/<step-id>.md`.

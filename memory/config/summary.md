@@ -91,3 +91,18 @@ Every one of them validates with no environment variables set — that is a test
 
 `ticketbot validate`, `config list`, `config show`, `config banner`, `config init` never touch the
 engine. See [../cli/summary.md](../cli/summary.md).
+
+## The seven shipped profiles
+
+| Profile | Source / sink | Executor | Runtime | Needs |
+|---|---|---|---|---|
+| `_base.yaml` | file / file | `inline` (`api`) | none | - (parent only; never run directly) |
+| `file-stub-offline.yaml` | file / file | `stub` | none | nothing at all |
+| `file-claude-cli.yaml` | file / file | `claude-cli` (`process`) | none | a logged-in `claude` CLI |
+| `file-text-none.yaml` | file / file | `inline` (`api`) | none | `ANTHROPIC_API_KEY` |
+| `file-solari-desktop.yaml` | file / file | `inline` (`api`) | `solari` desktop | + `SOLARI_API_KEY` |
+| `jira-claude-solari.yaml` | jira / jira + github_pr + file | `claude-cli` (`process`) | `solari` desktop | Jira + GitHub + Solari |
+| `github-codex.yaml` | file / github_pr | `codex-cli` (`process`) | none | `MODEL_BASE_URL`/`MODEL_API_KEY` (no Anthropic anywhere) |
+
+`_base.yaml` deliberately holds NO `repo.path`: `extends:` deep-merges, and an inherited `path` made
+`GithubRepo` fetch into the profile's own directory instead of its clone cache.
