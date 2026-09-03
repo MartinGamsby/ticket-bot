@@ -1,0 +1,45 @@
+# Exercise the REAL Solari runtime without spending a single model token.
+#
+# `executor: stub` means no model, no API key, no thinking — but the runtime is
+# real: a Solari desktop session is created, connected, screenshotted at the
+# `screenshot_on` steps, and torn down properly. Use it to prove the Solari path
+# (credentials, SDK install, session lifecycle, screenshot capture into
+# `runs/<id>/screenshots/`) before pointing a real model at it.
+#
+#   uv pip install -e ".[solari]"        # the three Solari SDKs are an extra
+#   echo SOLARI_API_KEY=slr_live_... >> .env
+#   uv run ticketbot run -c profiles/file-solari-stub.yaml \
+#       --input-text "Add a /health endpoint" --repo /path/to/scratch --runs-dir runs
+#
+# Needs SOLARI_API_KEY and nothing else.
+#
+# READ THIS BEFORE EXPECTING A USEFUL PICTURE. The screenshot will be of an
+# untouched Linux desktop. ticketbot runs on YOUR machine; the Solari desktop is a
+# separate cloud VM, and nothing in the pipeline drives it — `can_exec` is False
+# for `desktop` and `browser`, so `shell.run` falls back to running locally, and
+# the tool catalogue has no navigate/click/type tools. The modes that can RUN a
+# command (`sandbox`) are exactly the modes that cannot screenshot, and vice
+# versa. So this profile proves the wiring end to end; it does not yet produce a
+# picture of the work being done. See memory/known-gaps.md.
+extends: _base.yaml
+name: file-solari-stub
+
+source: {type: file, glob: "inbox/*.md", processed_dir: "inbox/processed"}
+sink:   {type: file}
+repo:   {type: git_local, path: ".", branch_template: "agent/{ticket_key}-{slug}"}
+
+executor:
+  default: stub
+  kinds:
+    stub: {type: stub, sections: 2, echo_prompt: true, echo_limit: 2000}
+
+runtime:
+  type: solari
+  mode: desktop            # sandbox | browser | desktop
+  resolution: "1280x720"
+  timeout_ms: 600000       # rolling IDLE window, not a deadline — it resets on use
+  # The orchestrator calls `runtime.screenshot()` after each of these steps and
+  # writes the PNG to `runs/<id>/screenshots/<step>-NN.png`.
+  screenshot_on: [verify, publish]
+
+budget: {max_cost_usd: 0, max_wall_clock_s: 600}

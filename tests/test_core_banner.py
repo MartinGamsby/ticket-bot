@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from ticketbot.config.loader import load_profile
 from ticketbot.config.schema import Profile
 from ticketbot.core.banner import BannerFacts, facts_from_profile, render_banner, source_fact
@@ -102,9 +104,11 @@ def test_facts_from_profile_distinguishes_anthropic_and_openai_compat_models():
                     "peer": {"type": "openai_compat", "model": "gpt-5"},
                 },
             },
+            # An `api` kind on purpose: only that executor resolves model slots, so
+            # only that one gets a `models=` line for this test to inspect.
             "executor": {
-                "default": "claude-cli",
-                "kinds": {"claude-cli": {"type": "process", "cmd": ["claude", "-p"]}},
+                "default": "inline",
+                "kinds": {"inline": {"type": "api", "model": "main"}},
             },
             "runtime": {"type": "solari", "mode": "desktop", "resolution": "1280x720"},
         }
@@ -113,7 +117,7 @@ def test_facts_from_profile_distinguishes_anthropic_and_openai_compat_models():
     facts = facts_from_profile(profile)
 
     assert facts.models == ["main:Claude Opus 5", "peer:gpt-5 (openai_compat)"]
-    assert facts.executor == "process: claude -p"
+    assert facts.executor == "api: main"
     assert facts.runtime == "solari desktop 1280x720"
 
 
@@ -133,3 +137,36 @@ def test_banner_output_is_passed_through_redact_by_caller():
     banner_text = render_banner(facts)
     assert "sk-ant-" in banner_text  # not yet redacted
     assert "sk-ant-" not in redact(banner_text)  # redact() strips it
+
+
+def _profile_with_executor(kind: dict) -> Profile:
+    return Profile.model_validate(
+        {
+            "name": "banner-exec",
+            "source": {"type": "file"},
+            "sink": {"type": "file"},
+            "repo": {"type": "git_local", "path": "."},
+            "model": {
+                "default": "main",
+                "providers": {"main": {"type": "anthropic", "model": "claude-opus-5"}},
+            },
+            "executor": {"default": "k", "kinds": {"k": kind}},
+            "runtime": {"type": "none"},
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "kind, lists_models",
+    [
+        ({"type": "api", "model": "main"}, True),
+        ({"type": "process", "cmd": ["claude", "-p"]}, False),
+        ({"type": "stub"}, False),
+    ],
+)
+def test_the_config_banner_lists_models_only_for_an_api_executor(kind, lists_models):
+    """A `process` CLI picks its own model and a `stub` calls none, so advertising
+    the configured slots would name models the profile can never use."""
+    facts = facts_from_profile(_profile_with_executor(kind))
+
+    assert bool(facts.models) is lists_models
